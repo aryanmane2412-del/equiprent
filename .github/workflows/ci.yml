@@ -1,0 +1,52 @@
+﻿name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgis/postgis:18-3.6
+        env:
+          POSTGRES_USER: equiprent
+          POSTGRES_PASSWORD: equiprent_dev_password
+          POSTGRES_DB: equiprent_test
+        ports: ["5434:5432"]
+        options: >-
+          --health-cmd "pg_isready -U equiprent -d equiprent_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgres://equiprent:equiprent_dev_password@localhost:5434/equiprent_test?sslmode=disable
+      TEST_DATABASE_URL: postgres://equiprent:equiprent_dev_password@localhost:5434/equiprent_test?sslmode=disable
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/equiprent_app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.7
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test

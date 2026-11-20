@@ -1,0 +1,270 @@
+EQUIPRENT – COMPLETE BUG AND ERROR AUDIT
+==================================================
+
+Project name: EQUIPRENT
+Audit date: 2026-11-17
+Technologies inspected: Flutter/Dart, Go/Gin, PostgreSQL/PostGIS, SQL migrations and sqlc queries, REST/OpenAPI, Docker Compose, PowerShell scripts, Firebase configuration, Redis, Razorpay integration points, project documentation.
+Files inventoried: 292 backend files, 234 Flutter app files, and 23 documentation/infrastructure/script files (549 total across these inventories; some generated or non-source files are included).
+Source inventory: 200 Go files, 157 Dart files, 88 SQL files, 56 migration files. These are inventory counts, not a claim that every line was manually reviewed.
+Total confirmed problems: 5
+Critical problems count: 0
+High priority problems count: 2
+Medium priority problems count: 3
+Low priority problems count: 0
+Number of incomplete features: 4
+Areas that could not be tested: PostgreSQL/PostGIS integration against a disposable database; full live five-role flow; Flutter widget suite and production build; Android/iOS device behavior; real payment/SMS/email/push providers; upload scanning and production storage; load/performance behavior.
+
+Audit method and limits:
+The repository tree and source file inventory were scanned. Existing project reports and architecture docs were reviewed. Go and Dart analyzer/test results already available in this workspace were considered. No database was reset or modified. No credentials or values from .env are included. This is a static and partial automated audit, not a penetration test or proof that every file is bug-free.
+
+1. CRITICAL PROBLEMS
+No confirmed critical problem was established in this audit.
+
+2. HIGH PRIORITY PROBLEMS
+
+\==================================================\
+PROBLEM #001
+
+Problem Name:\
+Owner dashboard import does not resolve in project analysis
+
+Category:\
+Frontend
+
+Severity:\
+High
+
+Location:\
+frontend/equiprent_app/lib/features/owner/owner_module.dart:20,49
+Target file: frontend/equiprent_app/lib/features/owner/presentation/owner_dashboard_page.dart
+
+What is the problem?\
+Dart analysis reports that the OwnerDashboardPage import target does not exist and then reports that OwnerDashboardPage is not a class. The target file is present and analyzes directly, so the import resolution failure is confirmed but its exact cause is not yet isolated.
+
+Why does this happen?\
+The analyzer cannot resolve the owner dashboard library when it is imported from owner_module.dart. A stale package/analyzer cache, path resolution issue, or a file-system access problem may be involved. These are possible causes, not confirmed root causes.
+
+What happens if we do not fix it?\
+Flutter analysis fails, and the app build may fail when the owner route is compiled.
+
+SOLUTION:\
+Run `flutter pub get`, clear only generated Flutter analyzer/build caches if needed, then restore package configuration and analyze the owner module again. If it persists, compare the package root and import path casing on Windows and CI.
+
+CODE FIX:\
+The route references `OwnerDashboardPage()` at owner_module.dart:49. Keep the dashboard file and route; correct the import only after reproducing the resolver failure with a clean analyzer session. Do not delete the dashboard.
+
+How to test the solution:
+Run `flutter analyze lib/features/owner/owner_module.dart lib/features/owner/presentation/owner_dashboard_page.dart`, followed by full `flutter analyze` and a web build.
+
+Status:\
+Not Fixed
+
+\==================================================\
+PROBLEM #002
+
+Problem Name:\
+Admin finance screens still show mutation controls backed by mock state
+
+Category:\
+Security / Frontend
+
+Severity:\
+High
+
+Location:\
+frontend/equiprent_app/lib/features/admin/presentation/admin_finance_pages.dart:55-71, 88-151
+frontend/equiprent_app/lib/features/admin/admin_module.dart:52-105
+
+What is the problem?\
+The admin finance UI offers “Issue refund”, “Release all ready”, “Release now”, and payout hold controls. These screens read mock payment/settlement data and can show local demo changes. The backend admin route guard rejects writes, so these controls cannot complete real admin actions consistently with the required read-only role.
+
+Why does this happen?\
+The admin screens were built as interactive operations prototypes on mock providers, while the backend now enforces read-only access for platform-admin requests.
+
+What happens if we do not fix it?\
+An admin can see controls that appear actionable; clicks may alter demo state or fail with 403, confusing the user and undermining confidence in financial reporting.
+
+SOLUTION:\
+Replace admin operations screens with read-only views, remove refund/payout status controls, and present clear read-only records backed by GET APIs. Keep support/finance actions in a separately authorized operational role only if product requirements are changed.
+
+CODE FIX:\
+Remove `rowActions` for refund and payout controls and replace demo providers with read-only report providers. Preserve mock fixtures for tests and development until the project owner explicitly requests their removal.
+
+How to test the solution:
+Widget-test that admin pages have no write controls. Attempt every former POST/PUT/PATCH/DELETE route as admin and verify HTTP 403 with no database or mock-state mutation.
+
+Status:\
+Not Fixed
+
+\==================================================\
+PROBLEM #003
+
+Problem Name:\
+Admin analytics charts display hardcoded demo values
+
+Category:\
+Backend / Frontend / Financial reporting
+
+Severity:\
+High
+
+Location:\
+frontend/equiprent_app/lib/features/admin/presentation/admin_analytics_page.dart:18-105
+frontend/equiprent_app/lib/features/admin/presentation/admin_overview_page.dart:32-67
+
+What is the problem?\
+Analytics shows literal sample funnel and area numbers and uses MockData for GMV and booking-category charts. The range selector changes the label but does not fetch a date-filtered report. Export is also a “coming soon” action.
+
+Why does this happen?\
+The analytics screen is still a design prototype wired to mock data rather than an API provider and SQL-backed report endpoint.
+
+What happens if we do not fix it?\
+Admins may mistake demonstration values for real equipment, booking, revenue, or profit data and make incorrect decisions.
+
+SOLUTION:\
+Add a read-only report endpoint with validated UTC date bounds. Aggregate customer payments, commissions, refunds, owner settlements and expenses from their authoritative payment/ledger tables without counting rental gross as platform revenue. Connect date presets and custom range inputs to that endpoint and show loading, empty and error states.
+
+CODE FIX:\
+Replace `MockData.platformGmv`, `MockData.bookingsByCategory`, the local `funnel` and `areas` constants with API response fields. Retain test fakes only in test code.
+
+How to test the solution:
+Use a disposable migrated PostgreSQL database with known ledger entries. Verify each date boundary, no double counting, paise-to-INR display, and reconciliation to ledger totals. Test empty/error/loading UI states.
+
+Status:\
+Not Fixed
+
+\==================================================\
+
+3. MEDIUM PRIORITY PROBLEMS
+
+\==================================================\
+PROBLEM #004
+
+Problem Name:\
+Several role dashboards still use mock data instead of live API records
+
+Category:\
+Frontend / Integration
+
+Severity:\
+Medium
+
+Location:\
+frontend/equiprent_app/lib/core/mock/
+frontend/equiprent_app/lib/features/owner/presentation/owner_calendar_page.dart
+frontend/equiprent_app/lib/features/admin/presentation/admin_overview_page.dart
+README.md:99,132
+
+What is the problem?\
+The project documentation states that role screens still use realistic mock data, and source references confirm mock-backed owner calendar and admin overview screens. Existing API modules elsewhere do not prove those particular screens are live-connected.
+
+Why does this happen?\
+The repository is being developed in phases; API adapters and UI prototypes coexist.
+
+What happens if we do not fix it?\
+Users can see sample listings, bookings, earnings or operations that do not match the server, and their actions may not persist.
+
+SOLUTION:\
+Track each screen’s API integration as a separate migration task. Replace a mock provider only after the corresponding backend endpoint, authorization, loading/error states and workflow tests are available. Keep mock fixtures for widget tests.
+
+CODE FIX:\
+For each feature, introduce a repository/provider that calls the existing API client and map the response to the current UI model. Avoid changing the project-wide mock store in one step.
+
+How to test the solution:
+Run the screen against a local API and disposable database; verify server changes appear after refresh and failures are presented without fake success messages.
+
+Status:\
+Not Fixed
+
+\==================================================\
+PROBLEM #005
+
+Problem Name:\
+Important buttons still open “coming soon” placeholders
+
+Category:\
+Frontend / UI/UX
+
+Severity:\
+Medium
+
+Location:\
+frontend/equiprent_app/lib/features/admin/presentation/admin_finance_pages.dart:25,67
+frontend/equiprent_app/lib/features/admin/presentation/admin_analytics_page.dart:35
+frontend/equiprent_app/lib/features/owner/presentation/owner_profile_page.dart:212,234,268,275
+
+What is the problem?\
+Reconciliation export, gateway event log, analytics export, owner team invitations, booking rules, and payout-account changes contain `showComingSoon` placeholders.
+
+Why does this happen?\
+Those workflows have not been completed or connected to backend endpoints/providers.
+
+What happens if we do not fix it?\
+Users can reach controls that do not perform the advertised task; business and support workflows remain manual.
+
+SOLUTION:\
+Decide which items are in scope. Either implement each workflow end to end with validation and permissions, or remove/disable the entry with a clear available-state label until it is implemented.
+
+CODE FIX:\
+Replace `showComingSoon` callbacks with a real API/repository action and loading/error feedback, or render a disabled control with explicit “not available” text.
+
+How to test the solution:
+Tap each listed control on desktop and mobile. Confirm it completes the action or is clearly disabled; test failure and permission-denied behavior.
+
+Status:\
+Not Fixed
+
+\==================================================\
+
+4. LOW PRIORITY PROBLEMS
+No additional confirmed low-severity defect was established.
+
+5. FRONTEND PROBLEMS
+See PROBLEM #001, #002, #003, #004, and #005. The Flutter analyzer run reported two owner dashboard import diagnostics. Other surfaces and device layouts were not fully tested.
+
+6. BACKEND PROBLEMS
+No additional confirmed backend defect is included here beyond the user-facing reporting integration gap in PROBLEM #003. The backend has modular handlers, auth guards, service logic, sqlc queries, and existing unit/integration test packages. This is not a claim that every endpoint is defect-free.
+
+7. DATABASE PROBLEMS
+No destructive or schema defect was confirmed from the available static evidence. There are 28 numbered migration pairs (56 up/down files) and PostGIS usage. Database integrity, migrations against a live disposable PostgreSQL/PostGIS instance, role grants and query plans were not executed; these remain unverified, not confirmed bugs.
+
+8. SECURITY PROBLEMS
+The admin UI issue is documented in PROBLEM #002. No password, token, API key or .env value is included. A penetration test, live upload attack test, production database-role audit, dependency vulnerability scan and secret scan were not run. Treat those as security verification gaps rather than confirmed vulnerabilities.
+
+9. PAYMENT AND BOOKING PROBLEMS
+Financial reporting gap: PROBLEM #003. Existing backend unit/integration tests cover booking overlap and payment-signature handling, but this audit did not execute the database-backed rental lifecycle or live gateway flow. Refund webhooks, gateway reconciliation and real-money handling remain unable to verify without the configured provider/test environment.
+
+10. UI/UX PROBLEMS
+Placeholder and misleading interactive controls: PROBLEM #002 and #005. Desktop/mobile visual and accessibility review was not run on real devices.
+
+11. MISSING OR INCOMPLETE FEATURES
+
+- Date-filtered real admin analytics and reports: PROBLEM #003.
+- Read-only admin finance/listing/user views without mutation controls: PROBLEM #002.
+- Live API integration for all role screens: PROBLEM #004.
+- Export, gateway event history, owner team invitation, booking policy and payout-account flows: PROBLEM #005.
+- Real provider credentials and live SMS/email/push/payment validation are deployment dependencies; no credentials are recorded here.
+
+12. DEPLOYMENT PROBLEMS
+
+- Production checklist remains incomplete: TLS/DNS, secrets management, live provider setup, backups/restore, monitoring/on-call, shared Redis behavior, storage lifecycle/security, performance, privacy/legal and release signing are not proven by this audit. These are release blockers or verification requirements, not asserted runtime bugs.
+- Flutter production web/Android builds and production database migrations were not run. No deploy or database reset was performed.
+
+AREAS NOT TESTED
+==================================================
+- PostgreSQL/PostGIS integration suite because no disposable TEST_DATABASE_URL was established for this audit.
+- Full Flutter widget suite and production build. The SDK exists at C:\flutter\bin, but a clean complete analyze/test run did not finish during this audit.
+- Android emulator/device, iOS device, browser layout matrix, and accessibility checks.
+- Live Razorpay, SMS, email, FCM, object storage, Google Maps, and production Redis.
+- Production data preservation and real settlement reconciliation; no database was opened or changed.
+
+RECOMMENDED FIXING ORDER
+==================================================
+1. Fix and rerun the owner dashboard import/analyzer issue (PROBLEM #001) so Flutter builds can be trusted.
+2. Remove admin write controls and demo mutations while keeping backend authorization enforcement (PROBLEM #002).
+3. Connect analytics to read-only, ledger-reconciled date-range API queries and prove totals against a disposable database (PROBLEM #003).
+4. Integrate high-use owner/customer/operator/fleet screens with real API repositories screen by screen (PROBLEM #004).
+5. Implement or clearly disable the remaining placeholder actions (PROBLEM #005).
+6. Run database-backed role/tenant, upload, refund, migration, responsive, performance and production-provider checks before any release.
+
+END OF AUDIT

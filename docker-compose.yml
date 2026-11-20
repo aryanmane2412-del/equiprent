@@ -1,0 +1,122 @@
+# EQUIPRENT local development stack.
+#
+#   docker compose up -d                          # PostgreSQL + PostGIS only (run Go/Flutter natively)
+#   docker compose --profile redis up -d          # + Redis (set REDIS_URL in .env)
+#   docker compose --profile app up -d --build    # + migrations, API and worker in containers
+#   docker compose --profile web up -d --build    # + Flutter web on http://localhost:8081 (large image)
+#   docker compose down                           # stop (data kept in the pgdata volume)
+#   docker compose down -v                        # stop and DELETE local data
+#
+# Values come from .env (copy .env.example). PostgreSQL is published on 5434
+# so it never collides with a native PostgreSQL on 5432 (or other local clusters on 5433).
+
+name: equiprent
+
+x-backend-env: &backend-env
+  APP_ENV: development
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  LOG_FORMAT: json
+  HTTP_PORT: "8080"
+  DATABASE_URL: postgres://${POSTGRES_USER:-equiprent}:${POSTGRES_PASSWORD:-equiprent_dev_password}@postgres:5432/${POSTGRES_DB:-equiprent}?sslmode=disable
+  # Empty = Redis disabled. With --profile redis use redis://redis:6379/0
+  REDIS_URL: ${COMPOSE_REDIS_URL:-}
+  CORS_ALLOWED_ORIGINS: http://localhost:8081
+  CORS_ALLOW_LOCALHOST: "true"
+
+services:
+  postgres:
+    image: postgis/postgis:18-3.6
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-equiprent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-equiprent_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-equiprent}
+    ports:
+      - "${POSTGRES_PORT:-5434}:5432"
+    volumes:
+      # PostgreSQL 18 images keep data under /var/lib/postgresql/<major>/.
+      - pgdata:/var/lib/postgresql
+      - ./infrastructure/docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    profiles: ["redis"]
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    image: migrate/migrate:v4.20.1
+    profiles: ["app"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend/migrations:/migrations:ro
+    command:
+      - -path=/migrations
+      - -database=postgres://${POSTGRES_USER:-equiprent}:${POSTGRES_PASSWORD:-equiprent_dev_password}@postgres:5432/${POSTGRES_DB:-equiprent}?sslmode=disable
+      - up
+
+  api:
+    profiles: ["app"]
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/docker/backend.Dockerfile
+      args:
+        TARGET: api
+    restart: unless-stopped
+    environment: *backend-env
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/app", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    profiles: ["app"]
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/docker/backend.Dockerfile
+      args:
+        TARGET: worker
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+      SERVICE_NAME: equiprent-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    profiles: ["web"]
+    build:
+      context: ./frontend/equiprent_app
+      dockerfile: ../../infrastructure/docker/frontend-web.Dockerfile
+      args:
+        API_BASE_URL: ${WEB_API_BASE_URL:-http://localhost:8080}
+    ports:
+      - "${WEB_PORT:-8081}:80"
+
+volumes:
+  pgdata:

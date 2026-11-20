@@ -1,0 +1,57 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Go
+backend/bin/
+backend/tmp/
+*.test
+*.out
+coverage.*
+cover.html
+
+# Local data and tooling
+# private document store (identity documents) - never commit
+backend/var/
+.local/
+*.log
+
+# Editors / OS
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Flutter has its own rules in frontend/equiprent_app/.gitignore
+
+# Firebase web push config (per environment)
+frontend/equiprent_app/web/firebase-config.js
+
+# Temp caches, profiles, logs (disposable)
+.tmp*/
+backend/.tmp*/
+backend/.gocache/
+.tmp-*.log
+*.log
+Microsoft/
+backend/var/
+uploads/
+kyc/
+*.sql.gz
+*.dump
+*.p12
+*.jks
+key.properties
+service-account*.json
+google-services.json
+frontend/equiprent_app/build/
+frontend/equiprent_app/.dart_tool/
+frontend/equiprent_app/.idea/

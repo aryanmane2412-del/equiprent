@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS equipment_inspection_policy_consents;

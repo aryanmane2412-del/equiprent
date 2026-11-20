@@ -1,0 +1,17 @@
+DROP TABLE IF EXISTS availability_blocks;
+DROP TYPE IF EXISTS availability_block_reason;
+DROP TABLE IF EXISTS cancellation_policies;
+DROP TABLE IF EXISTS mobilisation_rates;
+DROP TABLE IF EXISTS pricing_plans;
+DROP TYPE IF EXISTS price_unit;
+DROP TABLE IF EXISTS equipment_documents;
+DROP TYPE IF EXISTS equipment_document_type;
+DROP TABLE IF EXISTS equipment_media;
+DROP TABLE IF EXISTS equipment_specifications;
+DROP TABLE IF EXISTS equipment;
+DROP TYPE IF EXISTS fuel_policy;
+DROP TYPE IF EXISTS listing_status;
+DROP TABLE IF EXISTS operator_skills;
+DROP TABLE IF EXISTS equipment_models;
+DROP TABLE IF EXISTS equipment_makes;
+DROP TABLE IF EXISTS equipment_categories;

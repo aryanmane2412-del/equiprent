@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS fleet_manager_profiles;
+DROP TABLE IF EXISTS operator_profiles;
+DROP TABLE IF EXISTS owner_profiles;
+DROP TABLE IF EXISTS customer_profiles;
+DROP TABLE IF EXISTS bank_accounts;
+DROP TABLE IF EXISTS kyc_records;
+DROP TYPE IF EXISTS kyc_document_type;
+ALTER TABLE organizations DROP COLUMN IF EXISTS billing_address_id;
+DROP TABLE IF EXISTS addresses;
+DROP TABLE IF EXISTS cities;

@@ -1,0 +1,3 @@
+DROP TRIGGER IF EXISTS inspection_decision_history_append_only ON inspection_decision_history;
+DROP TRIGGER IF EXISTS customer_delivery_photos_append_only ON customer_delivery_photos;
+DROP TRIGGER IF EXISTS booking_inspection_ack_append_only ON booking_inspection_acknowledgements;

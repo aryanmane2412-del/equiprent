@@ -1,0 +1,14 @@
+DROP TABLE IF EXISTS user_roles;
+DROP FUNCTION IF EXISTS user_roles_check_scope();
+DROP TABLE IF EXISTS organizations;
+DROP TYPE IF EXISTS verification_status;
+DROP TYPE IF EXISTS org_type;
+DROP TABLE IF EXISTS consents;
+DROP TABLE IF EXISTS devices;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS otp_challenges;
+DROP TABLE IF EXISTS users;
+DROP TYPE IF EXISTS account_status;
+DROP TABLE IF EXISTS role_permissions;
+DROP TABLE IF EXISTS permissions;
+DROP TABLE IF EXISTS roles;
