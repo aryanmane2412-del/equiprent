@@ -48,6 +48,7 @@ type Config struct {
 	Auth            AuthConfig
 	RateLimit       RateLimitConfig
 	Payments        PaymentsConfig
+	Payout          PayoutConfig
 	Maps            MapsConfig
 	Push            PushConfig
 	ESign           ESignConfig
@@ -168,6 +169,25 @@ type PaymentsConfig struct {
 // Sandbox reports whether no gateway credentials are configured, in which
 // case orders are simulated locally (development only).
 func (p PaymentsConfig) Sandbox() bool { return p.KeyID == "" || p.KeySecret == "" }
+
+// PayoutConfig configures owner payouts. With no provider, owners are paid
+// manually (or by the simulator in development).
+type PayoutConfig struct {
+	// Provider is "" (no automatic payouts) or "razorpayx".
+	Provider string
+	// AccountNumber is the RazorpayX account the payouts are debited from.
+	AccountNumber string
+	// Mode is the transfer rail: IMPS (instant, default), NEFT, RTGS or UPI.
+	Mode string
+	// MaxPaise caps one payout; a larger one is held for a person to release.
+	MaxPaise int64
+	// BankCooldown holds payouts after an owner adds or changes the payout
+	// account, so a hijacked account cannot redirect money immediately.
+	BankCooldown time.Duration
+}
+
+// Live reports whether real transfers are configured.
+func (p PayoutConfig) Live() bool { return p.Provider == "razorpayx" }
 
 // MapsConfig configures Google Maps Platform. Without a key, search still
 // works with the PIN code reference table and the built-in map.
@@ -394,6 +414,13 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 			KeySecret:     l.str("PAYMENT_KEY_SECRET", ""),
 			WebhookSecret: l.str("PAYMENT_WEBHOOK_SECRET", devSecret(env, "dev-only-webhook-secret")),
 		},
+		Payout: PayoutConfig{
+			Provider:      strings.ToLower(l.str("PAYOUT_PROVIDER", "")),
+			AccountNumber: l.str("RAZORPAYX_ACCOUNT_NUMBER", ""),
+			Mode:          strings.ToUpper(l.str("PAYOUT_MODE", "IMPS")),
+			MaxPaise:      int64(l.int("PAYOUT_MAX_PAISE", 20_000_000)), // INR 2,00,000
+			BankCooldown:  l.duration("PAYOUT_BANK_COOLDOWN", 24*time.Hour),
+		},
 		Tracking: TrackingConfig{
 			AllowSimulated: l.bool("TRACKING_ALLOW_SIMULATED", !env.IsProduction()),
 			IdleTimeout:    l.duration("TRACKING_IDLE_TIMEOUT", 3*time.Hour),
@@ -598,6 +625,29 @@ func (c Config) validate(l *loader) {
 	}
 	if c.Env.IsProduction() && c.Payments.Sandbox() {
 		l.fail("PAYMENT_KEY_ID", errors.New("gateway credentials are required in production"))
+	}
+	switch c.Payout.Provider {
+	case "":
+	case "razorpayx":
+		if c.Payments.Sandbox() {
+			l.fail("PAYOUT_PROVIDER", errors.New("razorpayx payouts need real PAYMENT_KEY_ID / PAYMENT_KEY_SECRET"))
+		}
+		if c.Payout.AccountNumber == "" {
+			l.fail("RAZORPAYX_ACCOUNT_NUMBER", errors.New("required for razorpayx payouts"))
+		}
+		if c.Env.IsProduction() && c.Payout.BankCooldown < time.Hour {
+			l.fail("PAYOUT_BANK_COOLDOWN", errors.New("must be at least 1h in production"))
+		}
+	default:
+		l.fail("PAYOUT_PROVIDER", fmt.Errorf("unsupported provider %q (supported: razorpayx, or empty for manual payouts)", c.Payout.Provider))
+	}
+	switch c.Payout.Mode {
+	case "IMPS", "NEFT", "RTGS", "UPI":
+	default:
+		l.fail("PAYOUT_MODE", fmt.Errorf("unsupported mode %q (IMPS, NEFT, RTGS, UPI)", c.Payout.Mode))
+	}
+	if c.Payout.MaxPaise < 100 || c.Payout.BankCooldown < 0 {
+		l.fail("PAYOUT_MAX_PAISE", errors.New("must be at least 100 paise, and the bank cool-down cannot be negative"))
 	}
 	switch c.ESign.Provider {
 	case "builtin":

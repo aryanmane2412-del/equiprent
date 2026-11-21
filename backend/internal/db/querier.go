@@ -118,6 +118,9 @@ type Querier interface {
 	ConsumeOTPChallenge(ctx context.Context, id uuid.UUID) (int64, error)
 	// Read positions of the current members (read receipts).
 	ConversationReaders(ctx context.Context, conversationID uuid.UUID) ([]ConversationReadersRow, error)
+	// Earlier attempts at the same settlement set that did not complete. Each retry needs its own
+	// idempotency key: the first key stays bound to the failed attempt.
+	CountFailedPayoutAttempts(ctx context.Context, arg CountFailedPayoutAttemptsParams) (int32, error)
 	CountInspectionAcknowledgements(ctx context.Context, arg CountInspectionAcknowledgementsParams) (int32, error)
 	CountListingPhotos(ctx context.Context, equipmentID uuid.UUID) (int32, error)
 	CountMemberUnread(ctx context.Context, userID uuid.NullUUID) (int32, error)
@@ -672,11 +675,17 @@ type Querier interface {
 	// the named) machine is in their scope, or they manage every machine.
 	OwnerSideRecipients(ctx context.Context, arg OwnerSideRecipientsParams) ([]uuid.UUID, error)
 	PayDriverCompensation(ctx context.Context, arg PayDriverCompensationParams) (DriverCompensation, error)
-	PayableSettlements(ctx context.Context, lim int32) ([]PayableSettlementsRow, error)
+	PayableSettlements(ctx context.Context, arg PayableSettlementsParams) ([]PayableSettlementsRow, error)
 	PayoutByIdempotencyKey(ctx context.Context, arg PayoutByIdempotencyKeyParams) (uuid.UUID, error)
 	PayoutSettlements(ctx context.Context, payoutID uuid.UUID) ([]PayoutSettlementsRow, error)
 	PayoutTransferState(ctx context.Context, payoutID uuid.UUID) (PayoutTransferStateRow, error)
 	PayoutsToReconcile(ctx context.Context, lim int32) ([]PayoutsToReconcileRow, error)
+	// Payouts sent to the gateway whose final bank outcome is not known yet.
+	PayoutsToSettle(ctx context.Context, lim int32) ([]PayoutsToSettleRow, error)
+	// ---- live payouts: submit, settle, link --------------------------------------------------------
+	// Payouts recorded but never confirmed as sent (timeout / crash). Re-sending with the same
+	// idempotency key is safe. A payout is not re-sent if the payout account changed since.
+	PayoutsToSubmit(ctx context.Context, arg PayoutsToSubmitParams) ([]PayoutsToSubmitRow, error)
 	PlatformStats(ctx context.Context) (PlatformStatsRow, error)
 	PlatformUsersWithRoles(ctx context.Context, roles []string) ([]uuid.UUID, error)
 	ProcessedRefundTotal(ctx context.Context, paymentID uuid.UUID) (int64, error)
@@ -863,6 +872,8 @@ type Querier interface {
 	// ---- operator ------------------------------------------------------------------------------
 	UpsertOperatorVerificationProfile(ctx context.Context, arg UpsertOperatorVerificationProfileParams) (OperatorProfile, error)
 	UpsertOwnerProfile(ctx context.Context, arg UpsertOwnerProfileParams) (OwnerProfile, error)
+	// A verified bank account becomes the owner's payout account (one per owner).
+	UpsertPayoutLinkedAccount(ctx context.Context, arg UpsertPayoutLinkedAccountParams) (uuid.UUID, error)
 	UpsertPickupRates(ctx context.Context, arg UpsertPickupRatesParams) error
 	UpsertSourcedLastLocation(ctx context.Context, arg UpsertSourcedLastLocationParams) error
 	// Any change to a rule clears its review: the new wording must be reviewed again.

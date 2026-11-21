@@ -283,9 +283,9 @@ ORDER BY s.created_at DESC
 LIMIT @lim;
 
 -- name: SetSettlementStatus :one
-UPDATE settlements SET status = @status, hold_reason = sqlc.narg(hold_reason),
-       paid_at = CASE WHEN @status = 'paid' THEN now() ELSE paid_at END
-WHERE id = @id AND status = ANY(@from_statuses::settlement_status[])
+UPDATE settlements SET status = @status::settlement_status, hold_reason = sqlc.narg(hold_reason),
+       paid_at = CASE WHEN @status::settlement_status = 'paid' THEN now() ELSE paid_at END
+WHERE id = @id AND status = ANY((@from_statuses::text[])::settlement_status[])
 RETURNING *;
 
 -- name: ReleaseDueSettlements :many
@@ -305,6 +305,8 @@ RETURNING s.id;
 SELECT s.*, l.id AS linked_id, l.account_id, l.bank_account_id
 FROM settlements s
 JOIN payout_linked_accounts l ON l.owner_org_id = s.owner_org_id AND l.activation_status = 'activated'
+  -- a freshly added or changed payout account is held back (account-change fraud cool-down)
+  AND l.updated_at <= now() - make_interval(secs => @cooldown_secs::float8)
 WHERE s.status = 'eligible' AND s.net_payable_paise > 0
   AND NOT EXISTS (SELECT 1 FROM payout_items pi JOIN payouts po ON po.id = pi.payout_id
                    WHERE pi.settlement_id = s.id AND pi.active AND po.status IN ('queued', 'processing', 'paid'))
@@ -399,7 +401,7 @@ SELECT count(*) FILTER (WHERE status IN ('pending', 'created'))::int AS open,
 FROM payout_transfers WHERE payout_id = @payout_id;
 
 -- name: FinishPayout :one
-UPDATE payouts SET status = @status, paid_at = CASE WHEN @status = 'paid' THEN now() END, failure_reason = sqlc.narg(failure_reason)
+UPDATE payouts SET status = @status::payout_status, paid_at = CASE WHEN @status::payout_status = 'paid' THEN now() END, failure_reason = sqlc.narg(failure_reason)
 WHERE id = @id AND status = 'processing'
 RETURNING id, owner_org_id, amount_paise;
 
@@ -461,3 +463,39 @@ SELECT pi.settlement_id FROM payout_items pi WHERE pi.payout_id = @payout_id;
 
 -- name: GetPayoutGatewayID :one
 SELECT gateway_transfer_id FROM payouts WHERE id = @id;
+
+-- ---- live payouts: submit, settle, link --------------------------------------------------------
+
+-- name: PayoutsToSubmit :many
+-- Payouts recorded but never confirmed as sent (timeout / crash). Re-sending with the same
+-- idempotency key is safe. A payout is not re-sent if the payout account changed since.
+SELECT po.id, po.owner_org_id, po.amount_paise, po.idempotency_key, l.account_id
+FROM payouts po JOIN payout_linked_accounts l ON l.id = po.linked_account_id
+WHERE po.status = 'processing' AND po.gateway_transfer_id IS NULL AND po.idempotency_key IS NOT NULL
+  AND po.created_at < now() - make_interval(secs => @min_age_secs::float8)
+  AND l.updated_at <= po.created_at
+ORDER BY po.created_at
+LIMIT @lim;
+
+-- name: CountFailedPayoutAttempts :one
+-- Earlier attempts at the same settlement set that did not complete. Each retry needs its own
+-- idempotency key: the first key stays bound to the failed attempt.
+SELECT count(*)::int FROM payouts
+WHERE owner_org_id = @owner_org_id AND status IN ('failed', 'reversed')
+  AND (idempotency_key = @base_key::text OR idempotency_key LIKE (@base_key::text || ':%'));
+
+-- name: PayoutsToSettle :many
+-- Payouts sent to the gateway whose final bank outcome is not known yet.
+SELECT id, owner_org_id, amount_paise, gateway_transfer_id FROM payouts
+WHERE status = 'processing' AND gateway_transfer_id IS NOT NULL
+ORDER BY created_at
+LIMIT @lim;
+
+-- name: UpsertPayoutLinkedAccount :one
+-- A verified bank account becomes the owner's payout account (one per owner).
+INSERT INTO payout_linked_accounts (owner_org_id, provider, mode, account_id, activation_status, requirements, bank_account_id)
+VALUES (@owner_org_id, @provider, @mode, @account_id, 'activated', '[]', @bank_account_id)
+ON CONFLICT (owner_org_id) DO UPDATE
+SET provider = EXCLUDED.provider, mode = EXCLUDED.mode, account_id = EXCLUDED.account_id,
+    activation_status = 'activated', bank_account_id = EXCLUDED.bank_account_id
+RETURNING id;

@@ -68,7 +68,7 @@ type Repository interface {
 	UpdateBusiness(ctx context.Context, p db.UpdateOwnerBusinessParams) (db.Organization, error)
 	SetOrgKYC(ctx context.Context, org uuid.UUID, status string) error
 	Reopen(ctx context.Context, id uuid.UUID) (db.VerificationApplication, error)
-	ReplaceBankAccount(ctx context.Context, p db.InsertBankAccountParams) (db.InsertBankAccountRow, error)
+	ReplaceBankAccount(ctx context.Context, p db.InsertBankAccountParams, link PayoutLink) (db.InsertBankAccountRow, error)
 	BankAccount(ctx context.Context, org uuid.UUID) (*db.GetPrimaryBankAccountRow, error)
 
 	// operator
@@ -276,7 +276,18 @@ func (r *PGRepository) SetOrgKYC(ctx context.Context, org uuid.UUID, status stri
 	return database.MapError(r.q(ctx).SetOrgKYCStatus(ctx, db.SetOrgKYCStatusParams{ID: org, KycStatus: db.VerificationStatus(status)}))
 }
 
-func (r *PGRepository) ReplaceBankAccount(ctx context.Context, p db.InsertBankAccountParams) (db.InsertBankAccountRow, error) {
+// PayoutLink says how the verified account is paid: which provider verified it,
+// in which mode, and the provider's fund-account reference payouts go to.
+type PayoutLink struct {
+	Provider  string // razorpay | simulated
+	Mode      string // live | test | simulated
+	AccountID string
+}
+
+// ReplaceBankAccount saves the verified account and, in the same transaction,
+// makes it the owner's payout account. The payout account is what payouts are
+// sent to; without it a verified owner would never be paid.
+func (r *PGRepository) ReplaceBankAccount(ctx context.Context, p db.InsertBankAccountParams, link PayoutLink) (db.InsertBankAccountRow, error) {
 	var out db.InsertBankAccountRow
 	err := r.tx.InTx(ctx, func(ctx context.Context) error {
 		q := r.q(ctx)
@@ -284,7 +295,13 @@ func (r *PGRepository) ReplaceBankAccount(ctx context.Context, p db.InsertBankAc
 			return err
 		}
 		row, err := q.InsertBankAccount(ctx, p)
+		if err != nil {
+			return err
+		}
 		out = row
+		_, err = q.UpsertPayoutLinkedAccount(ctx, db.UpsertPayoutLinkedAccountParams{
+			OwnerOrgID: p.OrganizationID, Provider: link.Provider, Mode: link.Mode, AccountID: link.AccountID, BankAccountID: row.ID,
+		})
 		return err
 	})
 	return out, database.MapError(err)

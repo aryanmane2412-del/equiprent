@@ -54,24 +54,29 @@ func run() error {
 	a := app.New(cfg, log, deps.DB, deps.Store())
 	jobs := worker.Jobs{Pool: deps.DB, Dispatcher: a.Notifications, Refunds: a.Payments, Tracking: a.Tracking, Log: log,
 		ProcessingTimeout: cfg.Booking.ProcessingTimeout}.All()
-	st := &settlements.Service{Pool: deps.DB, Tx: a.Tx, Gateway: settlements.SandboxGateway{}, Hold: cfg.Booking.SettlementHold, Log: log}
+	gw := app.PayoutGateway(cfg)
+	st := &settlements.Service{Pool: deps.DB, Tx: a.Tx, Gateway: gw, Hold: cfg.Booking.SettlementHold, Log: log,
+		MaxPaise: cfg.Payout.MaxPaise, ForbidSimulated: cfg.Env.IsProduction()}
+	if cfg.Payout.Live() {
+		st.BankCooldown = cfg.Payout.BankCooldown // hold payouts after the payout account changed
+	}
 	jobs = append(jobs,
 		worker.Job{Name: "settlements.create", Interval: 5 * time.Minute, Timeout: 2 * time.Minute, Run: func(c context.Context) error { _, err := st.CreateSettlements(c, 100); return err }},
 		worker.Job{Name: "settlements.release", Interval: 5 * time.Minute, Run: st.ReleaseDue},
 	)
-	// The only payout gateway that exists SIMULATES transfers (no money moves).
-	// Running it where real payment keys are configured would mark owners as
-	// paid, and post "Owner payout" to the ledger, for money that never left.
-	// So the payout jobs run only in sandbox mode, never in production; with
-	// real keys settlements stay "eligible" until a live gateway is integrated
-	// and reconciliation is tested (docs/BACKEND.md), and owners are paid manually.
-	if settlements.SimulatedPayoutsAllowed(cfg.Payments.Sandbox(), cfg.Env.IsProduction()) {
+	// Payout gateway (app.PayoutGateway): RazorpayX when PAYOUT_PROVIDER=razorpayx, the
+	// simulator only in development without payment keys, otherwise none. The simulator
+	// records owners as paid without moving money, so it never runs with real keys or in
+	// production; with no gateway settlements stay "eligible" and owners are paid manually.
+	if gw != nil {
 		jobs = append(jobs,
 			worker.Job{Name: "payouts.run", Interval: 15 * time.Minute, Timeout: 5 * time.Minute, Run: func(c context.Context) error { return st.RunPayouts(c, 200) }},
+			worker.Job{Name: "payouts.settle", Interval: 2 * time.Minute, Timeout: 5 * time.Minute, Run: func(c context.Context) error { return st.SettleProcessing(c, 200) }},
 			worker.Job{Name: "payouts.reconcile", Interval: time.Hour, Timeout: 5 * time.Minute, Run: func(c context.Context) error { return st.Reconcile(c, 200) }},
 		)
+		log.Info("automatic owner payouts are ON", "gateway", map[bool]string{true: "simulated", false: cfg.Payout.Provider}[gw.Sandbox()], "mode", cfg.Payout.Mode)
 	} else {
-		log.Warn("automatic owner payouts are OFF: no live payout gateway is integrated. Settlements accumulate as eligible and must be paid out manually")
+		log.Warn("automatic owner payouts are OFF (set PAYOUT_PROVIDER=razorpayx): settlements accumulate as eligible and must be paid out manually")
 	}
 	jobs = append(jobs, worker.Job{
 		Name: "heartbeat", Interval: cfg.Worker.HeartbeatInterval,

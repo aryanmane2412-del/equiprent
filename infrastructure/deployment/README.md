@@ -28,12 +28,39 @@ Not set up yet. This folder will hold staging and production deployment config. 
 - [ ] Image built with `--build-arg VERSION=<tag> --build-arg COMMIT=<sha>`
 - [ ] Log retention ≥ 180 days in India (CERT-In)
 
-### Owner payouts (read before launch)
+### Owner payouts (RazorpayX)
 
-- No live payout gateway is integrated. The only one simulates transfers, so the worker
-  **does not run `payouts.run` / `payouts.reconcile` when real payment keys are set or in
-  production**. Settlements are still calculated and become `eligible`; pay owners manually
-  (bank transfer) and record it until a live gateway is built and its reconciliation tested.
-- With real keys, `PUT /verification/owner/bank-account` answers 503 ("not enabled yet"):
-  owners cannot complete the "payout bank account" verification step. Either integrate the
-  provider's fund-account validation or add a manual admin verification before onboarding owners.
+How owners are paid: when an owner saves a bank account, RazorpayX runs a **penny-drop validation**
+(it confirms the account exists, is active, and that the holder name matches) and only then is the
+account stored as the payout account. The worker then sends one **IMPS payout per owner** for their
+eligible settlements and finishes it only when the bank confirms.
+
+Safety rules built in (all covered by `backend/tests/payout_live_test.go`):
+
+- A payout is marked **paid only when RazorpayX reports `processed` and the amount matches ours**;
+  then the settlements are paid and the ledger entry is posted exactly once.
+- Every payout carries an **idempotency key**. If a request times out (outcome unknown) it is **not**
+  freed or duplicated: it is re-sent with the same key and RazorpayX returns the original payout.
+- A definite refusal (e.g. not enough balance) or a bank failure **frees the settlements** for a retry
+  with a new key; nothing is posted to the ledger.
+- A new or changed payout account is held back for `PAYOUT_BANK_COOLDOWN` (default 24h) so a hijacked
+  account cannot redirect money. A settlement above `PAYOUT_MAX_PAISE` waits for a person.
+- The simulator never runs with real keys or in production.
+
+**Go-live checklist (do these in order, do not skip the test-mode run):**
+
+1. Create a RazorpayX account, complete its KYC, and note the **RazorpayX account number**.
+2. Set `PAYMENT_KEY_ID` / `PAYMENT_KEY_SECRET` to **`rzp_test_`** keys, `PAYOUT_PROVIDER=razorpayx`,
+   `RAZORPAYX_ACCOUNT_NUMBER=<test account number>`.
+3. In test mode: add a bank account as an owner, check it verifies; complete a booking, let the worker
+   run, and confirm in the RazorpayX dashboard that the payout appears and the settlement turns `paid`.
+   Also test a failing account and an insufficient balance. **This integration was tested against a mock
+   of the RazorpayX API, not the real service, so this step is required.**
+4. Switch to `rzp_live_` keys and fund the RazorpayX balance. Money collected from customers does not
+   move into the RazorpayX balance by itself: set up the transfer (or top up) so payouts do not fail with
+   "insufficient balance".
+5. Watch the worker logs for `ALERT:` lines (rejected payouts, amount mismatches, over-cap settlements)
+   and the reconciliation mismatches that finance reviews.
+
+Not yet covered: RazorpayX webhooks (the worker polls payout status every 2 minutes instead), and
+`reversed` payouts after a bank return (they show up as a reconciliation mismatch for a person to resolve).

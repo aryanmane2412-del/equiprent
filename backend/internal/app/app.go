@@ -110,10 +110,7 @@ func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool, store cache.St
 	}
 	signer := storage.NewSigner(cfg.Storage.SigningSecret, strings.TrimRight(cfg.Docs.PublicURL, "/")+"/api/v1/files") // httpserver.APIPrefix + the uploads route
 	uploadSvc := uploads.NewService(uploads.NewRepository(pool), NewStore(cfg.Storage), signer, log)
-	var payouts verification.PayoutProvider = verification.UnconfiguredPayouts{}
-	if cfg.Payments.Sandbox() {
-		payouts = verification.SandboxPayouts{}
-	}
+	payouts := newPayoutProvider(cfg)
 	verifySvc := verification.NewService(verification.NewRepository(pool, tx), tx, uploadSvc, crypt, payouts,
 		verification.Options{URLTTL: cfg.Storage.URLTTL, AvatarURLTTL: cfg.Storage.AvatarURLTTL})
 	var authLimit = limiter.Middleware(ratelimit.Rule{Name: "auth", Limit: cfg.RateLimit.AuthPerMinute, Window: time.Minute, FailClosed: cfg.Env.IsProduction()}, ratelimit.ByIP)

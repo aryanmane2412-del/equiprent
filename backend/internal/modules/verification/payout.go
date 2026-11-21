@@ -24,6 +24,11 @@ type PayoutResult struct {
 	// reference, never to raw account numbers.
 	Reference string
 	Reason    string
+	// Provider ("razorpay" | "simulated") and Mode ("live" | "test" |
+	// "simulated") say who verified the account; they become the owner's
+	// payout account record.
+	Provider string
+	Mode     string
 }
 
 // PayoutProvider verifies bank accounts through the approved payment
@@ -45,7 +50,7 @@ func (SandboxPayouts) VerifyAccount(_ context.Context, a PayoutAccount) (PayoutR
 	}
 	b := make([]byte, 7)
 	_, _ = rand.Read(b)
-	return PayoutResult{Verified: true, Reference: "fa_sbx_" + hex.EncodeToString(b)}, nil
+	return PayoutResult{Verified: true, Reference: "fa_sbx_" + hex.EncodeToString(b), Provider: "simulated", Mode: "simulated"}, nil
 }
 
 // UnconfiguredPayouts is used when gateway credentials are set but the

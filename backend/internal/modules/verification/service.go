@@ -517,7 +517,7 @@ func (s *Service) SetBankAccount(ctx context.Context, sc httpx.Scope, req BankAc
 			OrganizationID: sc.Org, AccountHolderName: strings.TrimSpace(req.AccountHolderName), AccountNumberEnc: sealed.Enc,
 			AccountNumberHash: sealed.Hash, AccountLast4: sealed.Last4, Ifsc: ifsc, GatewayLinkedAccountID: &res.Reference,
 			VerificationStatus: db.VerificationStatusVerified, VerifiedAt: &now,
-		})
+		}, PayoutLink{Provider: res.Provider, Mode: res.Mode, AccountID: res.Reference})
 		if err != nil {
 			return err
 		}

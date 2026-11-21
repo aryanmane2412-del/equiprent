@@ -20,12 +20,16 @@ import (
 	"github.com/equiprent/backend/internal/ledger"
 )
 
-// ErrLiveTransfersDisabled is returned when a non-sandbox payout gateway is wired
-// before payout verification and reconciliation have been tested.
-var ErrLiveTransfersDisabled = errors.New("live payout transfers are disabled until verification and reconciliation are tested")
+// ErrSimulatedForbidden is returned when the simulated gateway is wired where it
+// must not run: it records owners as paid without moving any money.
+var ErrSimulatedForbidden = errors.New("the simulated payout gateway must not run here")
 
-// PayoutGateway moves money to an owner. Only SandboxGateway exists: no real
-// transfer code ships until reconciliation has been tested.
+// ErrNoGateway is returned when no payout gateway is configured.
+var ErrNoGateway = errors.New("no payout gateway configured")
+
+// PayoutGateway moves money to an owner. SandboxGateway simulates; a live
+// gateway (internal/payouts/razorpayx) is asynchronous: Transfer only submits
+// the payout, and Status later reports whether the bank completed it.
 type PayoutGateway interface {
 	Sandbox() bool
 	Transfer(ctx context.Context, idempotencyKey, linkedAccountID string, paise int64) (transferID string, err error)
@@ -53,6 +57,13 @@ type Service struct {
 	Gateway PayoutGateway
 	Hold    time.Duration // completion -> eligible (BOOKING_SETTLEMENT_HOLD)
 	Log     *slog.Logger
+
+	// MaxPaise caps one live payout; bigger settlements wait for a person.
+	MaxPaise int64
+	// BankCooldown holds payouts after the owner's payout account changed.
+	BankCooldown time.Duration
+	// ForbidSimulated refuses to run the simulated gateway at all (production).
+	ForbidSimulated bool
 }
 
 func (s *Service) q(ctx context.Context) *db.Queries { return database.Queries(ctx, s.Pool) }
@@ -203,126 +214,4 @@ func IdemKey(owner uuid.UUID, ids []uuid.UUID) string {
 		h.Write([]byte(x))
 	}
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-// RunPayouts pays eligible settlements, one payout per owner. The key hashes the owner and
-// settlement set, so a crash and re-run cannot create a second payout for the same settlements.
-// It refuses to run against a non-sandbox gateway.
-func (s *Service) RunPayouts(ctx context.Context, limit int32) error {
-	if s.Gateway == nil || !s.Gateway.Sandbox() {
-		return ErrLiveTransfersDisabled
-	}
-	var rows []db.PayableSettlementsRow
-	if err := s.Tx.InTx(ctx, func(ctx context.Context) (err error) {
-		rows, err = s.q(ctx).PayableSettlements(ctx, limit)
-		return
-	}); err != nil {
-		return err
-	}
-	byOwner := map[uuid.UUID][]db.PayableSettlementsRow{}
-	for _, r := range rows {
-		byOwner[r.OwnerOrgID] = append(byOwner[r.OwnerOrgID], r)
-	}
-	for owner, group := range byOwner {
-		if err := s.payOwner(ctx, owner, group); err != nil {
-			s.Log.Error("payout failed", "owner", owner, "err", err)
-		}
-	}
-	return nil
-}
-
-func (s *Service) payOwner(ctx context.Context, owner uuid.UUID, group []db.PayableSettlementsRow) error {
-	ids := make([]uuid.UUID, len(group))
-	var total int64
-	for i, g := range group {
-		ids[i] = g.ID
-		total += g.NetPayablePaise
-	}
-	key := IdemKey(owner, ids)
-	var payoutID uuid.UUID
-	err := s.Tx.InTxAs(ctx, database.Actor{Role: "system", Reason: "payout"}, func(ctx context.Context) error {
-		q := s.q(ctx)
-		id, err := q.InsertPayoutIdem(ctx, db.InsertPayoutIdemParams{OwnerOrgID: owner,
-			BankAccountID:   uuid.NullUUID{UUID: group[0].BankAccountID, Valid: true},
-			LinkedAccountID: uuid.NullUUID{UUID: group[0].LinkedID, Valid: true}, AmountPaise: total, IdempotencyKey: &key})
-		if err != nil {
-			if errors.Is(database.MapError(err), apperror.ErrNotFound) {
-				return nil // already recorded: never send twice
-			}
-			return err
-		}
-		payoutID = id
-		for _, g := range group {
-			if err := q.InsertPayoutItem(ctx, db.InsertPayoutItemParams{PayoutID: id, SettlementID: g.ID, AmountPaise: g.NetPayablePaise}); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil || payoutID == uuid.Nil {
-		return err
-	}
-	tid, terr := s.Gateway.Transfer(ctx, key, group[0].AccountID, total)
-	return s.Tx.InTxAs(ctx, database.Actor{Role: "system", Reason: "payout"}, func(ctx context.Context) error {
-		q := s.q(ctx)
-		if terr != nil {
-			reason := terr.Error()
-			if _, err := q.FinishPayout(ctx, db.FinishPayoutParams{ID: payoutID, Status: db.PayoutStatusFailed, FailureReason: &reason}); err != nil {
-				return err
-			}
-			return q.DeactivatePayoutItems(ctx, payoutID) // frees the settlements for a retry
-		}
-		if err := q.SetPayoutGatewayID(ctx, db.SetPayoutGatewayIDParams{ID: payoutID, GatewayTransferID: &tid}); err != nil {
-			return err
-		}
-		if _, err := q.FinishPayout(ctx, db.FinishPayoutParams{ID: payoutID, Status: db.PayoutStatusPaid}); err != nil {
-			return err
-		}
-		for _, g := range group {
-			if _, err := q.SetSettlementStatus(ctx, db.SetSettlementStatusParams{ID: g.ID, Status: db.SettlementStatusPaid,
-				FromStatuses: []db.SettlementStatus{db.SettlementStatusEligible}}); err != nil {
-				return err
-			}
-		}
-		_, err := ledger.Post(ctx, q, ledger.Posting{Kind: ledger.KindPayout, ReferenceType: "payout", ReferenceID: payoutID, Memo: "Owner payout",
-			Legs: []ledger.Leg{ledger.DrOwner(owner, total), ledger.Cr(ledger.GatewayClearing, total)}})
-		return err
-	})
-}
-
-// Reconcile compares each unreconciled payout with the gateway's view and records the result;
-// mismatches surface to finance for a person to resolve.
-func (s *Service) Reconcile(ctx context.Context, limit int32) error {
-	if s.Gateway == nil {
-		return nil
-	}
-	return s.Tx.InTxAs(ctx, database.Actor{Role: "system", Reason: "reconcile"}, func(ctx context.Context) error {
-		q := s.q(ctx)
-		ps, err := q.PayoutsToReconcile(ctx, limit)
-		if err != nil {
-			return err
-		}
-		for _, p := range ps {
-			gid, err := q.GetPayoutGatewayID(ctx, p.ID)
-			if err != nil || gid == nil {
-				continue
-			}
-			st, amt, err := s.Gateway.Status(ctx, *gid)
-			if err != nil {
-				continue
-			}
-			if amt < 0 {
-				amt = p.AmountPaise
-			}
-			ok := st == "processed" && amt == p.AmountPaise && p.Status == "paid"
-			note := ""
-			if !ok {
-				note = fmt.Sprintf("ours: %s %d; gateway: %s %d", p.Status, p.AmountPaise, st, amt)
-			}
-			if err := q.InsertReconciliation(ctx, db.InsertReconciliationParams{PayoutID: p.ID, GatewayStatus: st, GatewayPaise: amt, Matches: ok, Note: &note}); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
 }
