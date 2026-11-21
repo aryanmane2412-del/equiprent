@@ -28,7 +28,7 @@ abstract class AuthApi {
   Future<void> logout(String accessToken);
   Future<DevSecret> forgotPassword(String identifier);
   Future<void> resetPassword({String? token, String? phone, String? code, required String newPassword});
-  Future<void> verifyEmail(String token);
+  Future<void> verifyEmail(String token, String email);
 
   Future<AuthUser> me(String accessToken);
   Future<AuthUser> updateProfile(String accessToken, {String? fullName, String? email});
@@ -143,7 +143,7 @@ class HttpAuthApi implements AuthApi {
       );
 
   @override
-  Future<void> verifyEmail(String token) => _client.post('/auth/email/verify', body: {'token': token}, decode: (_) {});
+  Future<void> verifyEmail(String token, String email) => _client.post('/auth/email/verify', body: {'token': token, 'email': email}, decode: (_) {});
 
   @override
   Future<AuthUser> me(String accessToken) =>

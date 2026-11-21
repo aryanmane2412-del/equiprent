@@ -193,7 +193,7 @@ abstract final class AppTheme {
           backgroundColor: AppColors.navy700,
           foregroundColor: AppColors.white,
           disabledBackgroundColor: AppColors.slate200,
-          disabledForegroundColor: AppColors.slate400,
+          disabledForegroundColor: AppColors.slate500,
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
@@ -229,7 +229,7 @@ abstract final class AppTheme {
           horizontal: AppSpacing.md,
           vertical: 14,
         ),
-        hintStyle: text.bodyMedium?.copyWith(color: AppColors.slate400),
+        hintStyle: text.bodyMedium?.copyWith(color: AppColors.slate600),
         labelStyle: text.bodyMedium?.copyWith(color: AppColors.slate600),
         floatingLabelStyle: text.bodyMedium?.copyWith(
           color: AppColors.navy700,
@@ -400,11 +400,11 @@ abstract final class AppTheme {
       ),
       badgeTheme: const BadgeThemeData(
         backgroundColor: AppColors.orange600,
-        textColor: AppColors.white,
+        textColor: AppColors.navy950,
       ),
       floatingActionButtonTheme: const FloatingActionButtonThemeData(
         backgroundColor: AppColors.orange600,
-        foregroundColor: AppColors.white,
+        foregroundColor: AppColors.navy950,
         elevation: 2,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.all(Radius.circular(AppRadius.lg)),

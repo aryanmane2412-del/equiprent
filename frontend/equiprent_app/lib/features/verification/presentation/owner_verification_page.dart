@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/utils/validators.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/widgets/widgets.dart';
@@ -352,7 +353,7 @@ class _BusinessFormState extends State<BusinessForm> {
             controller: _phone,
             keyboardType: TextInputType.phone,
             requiredField: true,
-            validator: (v) => RegExp(r'^\+[1-9]\d{9,14}$').hasMatch((v ?? '').trim()) ? null : 'Use the +91 format',
+            validator: Validators.phone,
           ),
           gap,
           AppTextField(
@@ -403,7 +404,7 @@ class _BusinessFormState extends State<BusinessForm> {
                 if (_kind == 'company') 'cin': ?opt(_cin),
                 'udyam_number': ?opt(_udyam),
                 'contact_name': _contact.text.trim(),
-                'contact_phone': _phone.text.trim(),
+                'contact_phone': Validators.normalisePhone(_phone.text) ?? _phone.text.trim(),
                 'contact_email': _email.text.trim(),
                 'business_address': {'line1': _line1.text.trim(), 'city': _city.text.trim(), 'state_code': _state, 'pincode': _pin.text.trim()},
               });

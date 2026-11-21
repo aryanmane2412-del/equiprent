@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'session_reset.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -65,7 +66,12 @@ final routerProvider = Provider<GoRouter>((ref) {
   // GoRouter re-runs redirects whenever this notifier fires.
   final refresh = ValueNotifier<int>(0);
   ref.listen(activeRoleProvider, (_, _) => refresh.value++);
-  ref.listen(authControllerProvider, (_, _) => refresh.value++);
+  ref.listen(authControllerProvider, (prev, next) {
+    refresh.value++;
+    final left = prev?.isSignedIn == true && !next.isSignedIn;
+    final switched = prev?.user != null && next.user != null && prev!.user!.id != next.user!.id;
+    if (left || switched) resetUserState(ref);
+  });
 
   final router = GoRouter(
     initialLocation: AppRoutes.roleSelection,

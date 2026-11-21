@@ -146,7 +146,7 @@ class _VerifyPageState extends ConsumerState<VerifyPage> {
                   ? null
                   : () => _run(() async {
                         if (_emailToken.text.trim().isEmpty) throw StateError('empty');
-                        await ref.read(authApiProvider).verifyEmail(_emailToken.text.trim());
+                        await ref.read(authApiProvider).verifyEmail(_emailToken.text.trim(), pending.email!);
                         setState(() => _emailDone = true);
                       }),
             ),

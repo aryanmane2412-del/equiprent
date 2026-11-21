@@ -75,7 +75,9 @@ class _NotificationTile extends ConsumerWidget {
           if (!n.read) {
             try {
               await ref.read(commsApiProvider).markNotificationRead(n.id);
-            } catch (_) {}
+            } catch (_) {
+              // Best effort: it is shown as read again on the next refresh.
+            }
             ref.invalidate(notificationListProvider);
             ref.invalidate(unreadNotificationsProvider);
           }

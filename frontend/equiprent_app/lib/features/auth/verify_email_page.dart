@@ -20,6 +20,7 @@ class VerifyEmailPage extends ConsumerStatefulWidget {
 
 class _VerifyEmailPageState extends ConsumerState<VerifyEmailPage> {
   late final _token = TextEditingController(text: widget.token ?? '');
+  late final _email = TextEditingController(text: ref.read(authControllerProvider).user?.email ?? '');
   bool _busy = false;
   bool _done = false;
   Object? _error;
@@ -27,23 +28,24 @@ class _VerifyEmailPageState extends ConsumerState<VerifyEmailPage> {
   @override
   void initState() {
     super.initState();
-    if ((widget.token ?? '').isNotEmpty) WidgetsBinding.instance.addPostFrameCallback((_) => _verify());
+    if ((widget.token ?? '').isNotEmpty && _email.text.isNotEmpty) WidgetsBinding.instance.addPostFrameCallback((_) => _verify());
   }
 
   @override
   void dispose() {
     _token.dispose();
+    _email.dispose();
     super.dispose();
   }
 
   Future<void> _verify() async {
-    if (_token.text.trim().isEmpty) return;
+    if (_token.text.trim().isEmpty || _email.text.trim().isEmpty) return;
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
-      await ref.read(authApiProvider).verifyEmail(_token.text.trim());
+      await ref.read(authApiProvider).verifyEmail(_token.text.trim(), _email.text.trim());
       if (ref.read(authControllerProvider).isSignedIn) await ref.read(authControllerProvider.notifier).reloadUser();
       if (mounted) setState(() => _done = true);
     } on Object catch (e) {
@@ -66,6 +68,8 @@ class _VerifyEmailPageState extends ConsumerState<VerifyEmailPage> {
           const Gap(AppSpacing.md),
           AppButton(label: signedIn ? 'Back to my account' : 'Sign in', expand: true, onPressed: () => context.go(signedIn ? AuthRoutes.account : AuthRoutes.signIn)),
         ] else ...[
+          AppTextField(key: const ValueKey('email-address'), label: 'Email address', controller: _email, prefixIcon: AppIcons.mail),
+          const Gap(AppSpacing.sm),
           AppTextField(key: const ValueKey('email-token'), label: 'Verification code', controller: _token, prefixIcon: AppIcons.mail),
           const Gap(AppSpacing.md),
           AppButton(label: 'Verify', expand: true, size: AppButtonSize.large, isLoading: _busy, onPressed: _busy ? null : _verify),

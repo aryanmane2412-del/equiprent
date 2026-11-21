@@ -78,6 +78,10 @@ class _UpcomingTab extends ConsumerWidget {
               StatCard(label: 'Scheduled', value: '${open.length}', icon: AppIcons.calendar, tone: AppTone.info),
               StatCard(label: 'Plans due', value: '${dueList.length}', icon: AppIcons.clock, tone: dueList.isEmpty ? AppTone.neutral : AppTone.warning),
             ]),
+            if (due.hasError) ...[
+              const Gap(AppSpacing.md),
+              LoadFailedBanner(what: 'maintenance plans', onRetry: () => ref.invalidate(maintenanceDueProvider)),
+            ],
             if (dueList.isNotEmpty) ...[
               const Gap(AppSpacing.lg),
               const SectionHeader(title: 'Due by plan', subtitle: 'By calendar'),
@@ -320,7 +324,7 @@ class _PlansTabState extends ConsumerState<_PlansTab> {
             label: 'Machine',
             value: selected,
             items: [for (final l in list) l.id],
-            itemLabel: (id) => list.firstWhere((l) => l.id == id).title,
+            itemLabel: (id) => list.where((l) => l.id == id).firstOrNull?.title ?? id,
             onChanged: (v) => setState(() => _machine = v),
           ),
           const Gap(AppSpacing.md),

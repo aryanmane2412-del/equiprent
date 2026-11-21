@@ -1,3 +1,4 @@
+import '../../../core/utils/app_lifecycle.dart';
 import 'dart:async';
 
 import 'package:dio/dio.dart';
@@ -628,8 +629,18 @@ final chatPollProvider = Provider<Duration?>(
 
 void _refreshAfter(Ref ref, Duration? every) {
   if (every == null) return;
-  final timer = Timer(every, ref.invalidateSelf);
-  ref.onDispose(timer.cancel);
+  Timer? timer;
+  void schedule() {
+    timer = Timer(every, () {
+      if (appInBackground) {
+        schedule(); // do not poll while the app is not visible
+      } else {
+        ref.invalidateSelf();
+      }
+    });
+  }
+  schedule();
+  ref.onDispose(() => timer?.cancel());
 }
 
 final unreadNotificationsProvider = FutureProvider.autoDispose<int>((

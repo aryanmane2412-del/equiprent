@@ -1,3 +1,4 @@
+import '../../core/utils/app_lifecycle.dart';
 import 'dart:async';
 import 'dart:typed_data';
 
@@ -219,6 +220,7 @@ class _ChatThreadPageState extends ConsumerState<ChatThreadPage> {
       _messages.where((m) => !m.sending && !m.failed).lastOrNull?.id;
 
   Future<void> _pollNew() async {
+    if (appInBackground) return;
     final after = _lastServerId;
     try {
       final fresh = after == null
@@ -259,7 +261,9 @@ class _ChatThreadPageState extends ConsumerState<ChatThreadPage> {
       await _api.markConversationRead(widget.conversationId);
       ref.invalidate(unreadMessagesProvider);
       ref.invalidate(conversationsProvider);
-    } catch (_) {}
+    } catch (_) {
+      // Best effort: the unread badge simply refreshes on the next poll.
+    }
   }
 
   /// Sends optimistically; the client id makes retries safe.

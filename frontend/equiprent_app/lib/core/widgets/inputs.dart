@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../theme/app_icons.dart';
+import '../utils/validators.dart';
 import '../theme/app_tokens.dart';
 
 /// Labelled text input. The label sits above the field (better for long
@@ -311,6 +312,64 @@ class PickerField extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Date input that opens the calendar instead of accepting typed text. The controller holds the
+/// date as YYYY-MM-DD (what the API expects) and stays empty until a date is picked.
+class AppDateField extends StatelessWidget {
+  const AppDateField({
+    super.key,
+    required this.label,
+    required this.controller,
+    this.hint = 'Tap to choose a date',
+    this.requiredField = false,
+    this.allowPast = true,
+    this.firstDate,
+    this.lastDate,
+    this.onChanged,
+  });
+
+  final String label;
+  final TextEditingController controller;
+  final String hint;
+  final bool requiredField;
+
+  /// When false only today and later can be picked (licences, insurance, documents in force).
+  final bool allowPast;
+  final DateTime? firstDate;
+  final DateTime? lastDate;
+  final ValueChanged<DateTime>? onChanged;
+
+  static String format(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    final today = DateTime.now();
+    final startOfToday = DateTime(today.year, today.month, today.day);
+    return AppTextField(
+      label: label,
+      controller: controller,
+      hint: hint,
+      readOnly: true,
+      requiredField: requiredField,
+      prefixIcon: AppIcons.calendar,
+      validator: (v) => Validators.isoDate(v, required: requiredField, future: !allowPast),
+      onTap: () async {
+        final current = DateTime.tryParse(controller.text.trim());
+        final first = firstDate ?? (allowPast ? DateTime(today.year - 60) : startOfToday);
+        final last = lastDate ?? DateTime(today.year + 30);
+        var initial = current ?? (allowPast ? startOfToday : startOfToday);
+        if (initial.isBefore(first)) initial = first;
+        if (initial.isAfter(last)) initial = last;
+        final picked = await showDatePicker(context: context, initialDate: initial, firstDate: first, lastDate: last);
+        if (picked != null) {
+          controller.text = format(picked);
+          onChanged?.call(picked);
+        }
+      },
     );
   }
 }

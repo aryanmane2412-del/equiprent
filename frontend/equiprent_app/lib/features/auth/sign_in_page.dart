@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -136,7 +137,7 @@ class _SignInPageState extends ConsumerState<SignInPage> {
                   'Mobile OTP sign-in is switched off until an SMS provider is configured. Use your email or mobile number and password.',
             ),
           ],
-          if (caps?.devSimulation ?? false) ...[
+          if (!kReleaseMode && (caps?.devSimulation ?? false)) ...[
             const Gap(AppSpacing.md),
             DemoAccountsCard(
               onPick: (id, pw) {

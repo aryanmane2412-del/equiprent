@@ -157,7 +157,7 @@ class FakeAuthApi implements AuthApi {
   }
 
   @override
-  Future<void> verifyEmail(String token) async {
+  Future<void> verifyEmail(String token, String email) async {
     calls.add('verify-email:$token');
     if (!token.startsWith('email-token')) throw apiError(400, 'TOKEN_INVALID');
   }

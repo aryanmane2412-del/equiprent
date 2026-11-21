@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../auth/auth_controller.dart';
 import '../responsive/responsive.dart';
 import '../localization/app_strings.dart';
 import '../routing/role_module.dart';
@@ -9,7 +10,6 @@ import '../session/user_role.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_tokens.dart';
 import 'brand_logo.dart';
-import 'layout.dart';
 import 'media.dart';
 import 'overlays.dart';
 
@@ -134,7 +134,7 @@ class RoleShell extends ConsumerWidget {
   }
 }
 
-class _SideNav extends StatelessWidget {
+class _SideNav extends ConsumerWidget {
   const _SideNav({
     required this.role,
     required this.destinations,
@@ -150,8 +150,9 @@ class _SideNav extends StatelessWidget {
   final ValueChanged<int> onSelect;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final user = ref.watch(authControllerProvider).user;
     return AnimatedContainer(
       duration: AppMotion.medium,
       curve: AppMotion.emphasized,
@@ -223,14 +224,14 @@ class _SideNav extends StatelessWidget {
                 ),
                 child: Row(
                   children: [
-                    AppAvatar(name: role.personaName, size: 34),
+                    AppAvatar(name: user?.displayName ?? 'User', size: 34),
                     const SizedBox(width: AppSpacing.sm),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            role.personaName,
+                            user?.displayName ?? '',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: theme.textTheme.labelLarge?.copyWith(
@@ -238,7 +239,7 @@ class _SideNav extends StatelessWidget {
                             ),
                           ),
                           Text(
-                            role.personaOrg,
+                            user?.orgs[role] ?? user?.email ?? user?.phone ?? '',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: theme.textTheme.bodySmall?.copyWith(

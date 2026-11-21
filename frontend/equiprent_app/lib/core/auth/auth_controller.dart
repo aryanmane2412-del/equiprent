@@ -51,12 +51,12 @@ class AuthController extends Notifier<AuthState> {
 
   /// Signs in again from the stored refresh token, if any.
   Future<void> restore() async {
-    final refresh = await _store.readRefreshToken();
-    if (refresh == null) {
-      state = const AuthState.signedOut();
-      return;
-    }
     try {
+      final refresh = await _store.readRefreshToken();
+      if (refresh == null) {
+        state = const AuthState.signedOut();
+        return;
+      }
       await _apply(await _api.refresh(refresh));
     } on ApiException catch (e) {
       if (e.kind == ApiErrorKind.unauthorized ||
@@ -64,11 +64,21 @@ class AuthController extends Notifier<AuthState> {
         await _store.clear();
       }
       state = const AuthState.signedOut();
+    } on Object catch (e) {
+      // Unreadable storage, a malformed response or any other surprise: the app must still
+      // open on the sign-in screen rather than hang on "Signing you in".
+      debugPrint('session restore failed: $e');
+      state = const AuthState.signedOut();
     }
   }
 
   Future<void> _apply(AuthSession session) async {
-    await _store.writeRefreshToken(session.tokens.refreshToken);
+    try {
+      await _store.writeRefreshToken(session.tokens.refreshToken);
+    } on Object catch (e) {
+      // The session works in memory; it just will not survive a restart.
+      debugPrint('could not persist the session: $e');
+    }
     final previous = state.user?.id;
     state = AuthState.signedIn(session.user, session.tokens);
     if (previous != session.user.id) {

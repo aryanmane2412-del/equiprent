@@ -1,3 +1,4 @@
+import '../support/help_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -60,6 +61,18 @@ class AppSettingsPage extends StatelessWidget {
             subtitle: l.languagePreferenceDescription,
             icon: AppIcons.settings,
             child: const LanguageSelector(),
+          ),
+          SectionCard(
+            title: 'Help & support',
+            icon: AppIcons.fileText,
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('FAQ and contact support'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const HelpPage()),
+              ),
+            ),
           ),
           SectionCard(
             title: l.policiesAndTerms,

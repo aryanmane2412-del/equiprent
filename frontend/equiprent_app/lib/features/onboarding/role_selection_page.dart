@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../comms/comms_routes.dart';
+import '../../core/session/pending_link.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -20,7 +22,10 @@ class RoleSelectionPage extends ConsumerWidget {
 
     void choose(UserRole role) {
       ref.read(activeRoleProvider.notifier).select(role);
+      final link = ref.read(pendingLinkProvider.notifier).take();
       context.go(role.basePath);
+      final route = link == null ? null : routeForNotification(role, link.type, link.data);
+      if (route != null) context.push(route);
     }
 
     final user = ref.watch(authControllerProvider).user;

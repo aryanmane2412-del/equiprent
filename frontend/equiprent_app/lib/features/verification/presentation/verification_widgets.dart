@@ -258,7 +258,7 @@ class _AddDocumentFormState extends ConsumerState<_AddDocumentForm> {
         const Gap(AppSpacing.md),
         AppTextField(label: 'Document number (optional)', controller: _number, hint: 'Stored encrypted; only the last 4 are shown'),
         const Gap(AppSpacing.md),
-        AppTextField(label: 'Valid until (optional)', controller: _expiry, hint: 'YYYY-MM-DD', keyboardType: TextInputType.datetime),
+        AppDateField(label: 'Valid until (optional)', controller: _expiry),
         const Gap(AppSpacing.md),
         OutlinedButton.icon(
           key: const Key('pick-file'),

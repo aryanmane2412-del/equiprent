@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../../../core/session/pending_link.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -138,23 +139,45 @@ class _PushCoordinatorState extends ConsumerState<PushCoordinator> {
 
   void _open(PushMessage m) {
     _refreshBadges();
-    final role = ref.read(activeRoleProvider) ?? _defaultRole();
-    if (role == null) return;
-    final route = routeForNotification(role, m.data['type'] ?? '', m.data);
-    if (route != null) ref.read(routerProvider).go(route);
+    _resume(PendingLink(m.data['type'] ?? '', Map<String, Object?>.from(m.data)));
   }
 
-  UserRole? _defaultRole() {
-    final roles = ref.read(authControllerProvider).user?.roles ?? const [];
-    if (roles.isEmpty) return null;
-    final role = roles.first;
-    ref.read(activeRoleProvider.notifier).select(role);
-    return role;
+  /// Opens the link when the session is ready; otherwise keeps it for later. A role is never
+  /// guessed: with several roles the user picks one first, and the link then continues.
+  void _resume(PendingLink link) {
+    final auth = ref.read(authControllerProvider);
+    final pending = ref.read(pendingLinkProvider.notifier);
+    if (!auth.isSignedIn) {
+      pending.set(link); // still restoring, or signed out: replayed after sign-in
+      return;
+    }
+    final granted = auth.user?.roles ?? const <UserRole>[];
+    var role = ref.read(activeRoleProvider);
+    if (role == null && granted.length == 1) {
+      role = granted.single;
+      ref.read(activeRoleProvider.notifier).select(role);
+    }
+    final router = ref.read(routerProvider);
+    if (role == null || !granted.contains(role)) {
+      pending.set(link);
+      router.go(AppRoutes.roleSelection);
+      return;
+    }
+    final route = routeForNotification(role, link.type, link.data);
+    if (route == null) return;
+    router.go(role.basePath); // keep the role's home underneath so Back works
+    router.push(route);
   }
 
   @override
   Widget build(BuildContext context) {
-    ref.listen(authControllerProvider, (_, next) => _sync(next));
+    ref.listen(authControllerProvider, (_, next) {
+      _sync(next);
+      if (next.isSignedIn && ref.read(pendingLinkProvider) != null) {
+        final link = ref.read(pendingLinkProvider.notifier).take();
+        if (link != null) WidgetsBinding.instance.addPostFrameCallback((_) => _resume(link));
+      }
+    });
     return widget.child;
   }
 }

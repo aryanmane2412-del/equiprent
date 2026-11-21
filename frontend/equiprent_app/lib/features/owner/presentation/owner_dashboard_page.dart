@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../fleet_manager/data/fleet_api.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -44,10 +45,7 @@ class OwnerDashboardPage extends ConsumerWidget {
           }.contains(b.status),
         )
         .length;
-    final utilisation = listings.isEmpty
-        ? 0.0
-        : listings.map((e) => e.utilisation).reduce((a, b) => a + b) /
-              listings.length;
+    final overview = ref.watch(fleetOverviewProvider);
     final soon = DateTime.now().add(const Duration(days: 7));
     final tasks =
         (ref.watch(maintenanceHistoryProvider).value ??
@@ -103,10 +101,14 @@ class OwnerDashboardPage extends ConsumerWidget {
               ),
               StatCard(
                 label: 'Fleet utilisation',
-                value: Fmt.percent(utilisation),
+                value: overview.when(
+                  data: (o) => '${o.utilisationPct.toStringAsFixed(0)}%',
+                  loading: () => '…',
+                  error: (_, _) => '—',
+                ),
                 icon: AppIcons.gauge,
-                caption: 'Last 30 days',
-                onTap: () => context.go(OwnerRoutes.listings),
+                caption: overview.hasError ? 'Could not load · tap to retry' : 'Machines on a job now',
+                onTap: overview.hasError ? () => ref.invalidate(fleetOverviewProvider) : () => context.go(OwnerRoutes.listings),
               ),
               StatCard(
                 label: 'New requests',

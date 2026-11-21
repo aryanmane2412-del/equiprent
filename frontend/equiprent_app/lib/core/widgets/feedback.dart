@@ -337,3 +337,18 @@ abstract final class AppToast {
 void showComingSoon(BuildContext context, String feature, {String phase = 'Phase 1'}) {
   AppToast.show(context, '$feature isn’t available yet — planned for $phase.', tone: AppTone.info);
 }
+
+/// A section that could not load: says so and offers a retry, instead of silently showing it empty.
+class LoadFailedBanner extends StatelessWidget {
+  const LoadFailedBanner({super.key, required this.what, required this.onRetry});
+
+  final String what;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => InlineBanner(
+    tone: AppTone.warning,
+    message: 'Could not load $what.',
+    action: TextButton(onPressed: onRetry, child: const Text('Retry')),
+  );
+}

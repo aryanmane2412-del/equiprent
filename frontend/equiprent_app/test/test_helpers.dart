@@ -1,3 +1,4 @@
+import 'package:equiprent_app/core/widgets/offline_banner.dart';
 import 'package:equiprent_app/app/app.dart';
 import 'package:equiprent_app/app/router.dart';
 import 'package:equiprent_app/core/auth/auth_api.dart';
@@ -150,6 +151,7 @@ Future<ProviderContainer> pumpApp(
       pushServiceProvider.overrideWithValue(push ?? const NoPushService()),
       // No polling timers in tests (they would outlive the widget tree).
       badgePollProvider.overrideWithValue(null),
+      apiProbeEnabledProvider.overrideWithValue(false),
       chatPollProvider.overrideWithValue(null),
       trackPollProvider.overrideWithValue(null),
       trackingApiProvider.overrideWithValue(

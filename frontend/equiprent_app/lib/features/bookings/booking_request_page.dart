@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/utils/validators.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -9,7 +10,7 @@ import '../comms/presentation/comms_widgets.dart';
 import '../comms/presentation/ui.dart';
 import '../discovery/data/discovery_api.dart';
 import '../discovery/data/discovery_models.dart' show LocationDetails;
-import '../listings/data/listing_models.dart' show Listing, priceUnits;
+import '../listings/data/listing_models.dart' show BusyRange, Listing, priceUnits;
 import '../listings/data/listings_api.dart';
 import '../verification/presentation/customer_verification_page.dart'
     show stateCodes;
@@ -161,7 +162,7 @@ class _BookingRequestPageState extends ConsumerState<BookingRequestPage> {
         return 'Fill in all required customer details.';
       }
     }
-    if (!RegExp(r'^[6-9][0-9]{9}$').hasMatch(v['phone']!)) {
+    if (Validators.phone(v['phone']) != null) {
       return 'Enter a valid 10-digit mobile number.';
     }
     if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v['email']!)) {
@@ -211,7 +212,9 @@ class _BookingRequestPageState extends ConsumerState<BookingRequestPage> {
             ? 'Booking created. Complete the payment to confirm it.'
             : 'Request sent to ${l.ownerName}.',
       );
-      context.go('/customer/bookings/$id');
+      // Land on the bookings list with the new booking on top, so Back works.
+      context.go('/customer/bookings');
+      context.push('/customer/bookings/$id');
     } catch (e) {
       if (mounted) AppToast.error(context, describeError(e));
     } finally {
@@ -298,7 +301,8 @@ class _BookingRequestPageState extends ConsumerState<BookingRequestPage> {
   );
 
   Widget _datesSection(BuildContext context, Listing l) {
-    final busy = ref.watch(availabilityProvider(l.id)).value ?? const [];
+    final availability = ref.watch(availabilityProvider(l.id));
+    final busy = availability.value ?? const <BusyRange>[];
     final upcoming = busy
         .where((b) => b.end.isAfter(DateTime.now()))
         .take(4)
@@ -309,6 +313,14 @@ class _BookingRequestPageState extends ConsumerState<BookingRequestPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (availability.hasError) ...[
+            LoadFailedBanner(what: 'availability', onRetry: () => ref.invalidate(availabilityProvider(l.id))),
+            const InlineBanner(
+              tone: AppTone.warning,
+              message: 'Booked dates are unknown right now. The server re-checks your dates when you send the request.',
+            ),
+            const Gap(AppSpacing.ms),
+          ],
           PickerField(
             key: const Key('rental-dates'),
             label: 'Dates (${_dates.days} day${_dates.days == 1 ? '' : 's'})',

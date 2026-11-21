@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/localization/locale_controller.dart';
 import '../core/theme/app_theme.dart';
+import '../core/widgets/offline_banner.dart';
 import '../features/comms/push/push_coordinator.dart';
 import '../l10n/app_localizations.dart';
 import 'router.dart';
@@ -24,7 +25,7 @@ class EquipRentApp extends ConsumerWidget {
       themeMode: ThemeMode.light,
       routerConfig: ref.watch(routerProvider),
       builder: (context, child) =>
-          PushCoordinator(child: child ?? const SizedBox.shrink()),
+          OfflineBanner(child: PushCoordinator(child: child ?? const SizedBox.shrink())),
     );
   }
 }

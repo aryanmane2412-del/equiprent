@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/utils/validators.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -93,7 +94,13 @@ class FleetOverviewPage extends ConsumerWidget {
             ),
             const Gap(AppSpacing.lg),
             const SectionHeader(title: 'Needs attention'),
-            _Alerts(schedule: schedule.value ?? const [], roster: roster.value ?? const []),
+            if (schedule.hasError || roster.hasError)
+              LoadFailedBanner(what: 'alerts', onRetry: () {
+                ref.invalidate(fleetScheduleProvider);
+                ref.invalidate(fleetRosterProvider);
+              })
+            else
+              _Alerts(schedule: schedule.value ?? const [], roster: roster.value ?? const []),
             const Gap(AppSpacing.lg),
             SectionHeader(
               title: 'Fleets',
@@ -588,7 +595,7 @@ class _InviteFormState extends ConsumerState<_InviteForm> {
     if (!(_form.currentState?.validate() ?? false)) return;
     setState(() => _busy = true);
     try {
-      await ref.read(fleetApiProvider).inviteOperator(ref.read(fleetOrgProvider)!, phone: _phone.text.trim(), name: _name.text.trim());
+      await ref.read(fleetApiProvider).inviteOperator(ref.read(fleetOrgProvider)!, phone: Validators.normalisePhone(_phone.text) ?? _phone.text.trim(), name: _name.text.trim());
       if (mounted) Navigator.of(context).pop(true);
     } catch (e) {
       if (mounted) AppToast.error(context, describeError(e));
@@ -617,7 +624,7 @@ class _InviteFormState extends ConsumerState<_InviteForm> {
           label: 'Mobile number',
           controller: _phone,
           keyboardType: TextInputType.phone,
-          validator: (v) => RegExp(r'^\+[1-9]\d{9,14}$').hasMatch((v ?? '').trim()) ? null : 'Use the international format, e.g. +919876543210',
+          validator: Validators.phone,
         ),
         const Gap(AppSpacing.md),
         AppButton(key: const Key('invite-submit'), label: 'Add operator', isLoading: _busy, onPressed: _busy ? null : _submit),

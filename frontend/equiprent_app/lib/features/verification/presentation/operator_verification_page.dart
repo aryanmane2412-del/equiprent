@@ -451,22 +451,12 @@ class _OperatorProfileFormState extends State<OperatorProfileForm> {
             validator: (v) => (v ?? '').trim().length < 2 ? 'Required' : null,
           ),
           gap,
-          AppTextField(
+          AppDateField(
             key: const Key('licence-expiry'),
             label: 'Valid until',
             controller: _expiry,
-            hint: 'YYYY-MM-DD',
             requiredField: true,
-            validator: (v) {
-              final d = DateTime.tryParse((v ?? '').trim());
-              if (d == null ||
-                  !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(v!.trim())) {
-                return 'Use YYYY-MM-DD';
-              }
-              return d.isBefore(DateTime.now())
-                  ? 'This licence has expired'
-                  : null;
-            },
+            allowPast: false,
           ),
           gap,
           AppTextField(
@@ -590,12 +580,6 @@ class _QualificationFormState extends ConsumerState<_QualificationForm> {
     super.dispose();
   }
 
-  String? _date(String? v) =>
-      (v ?? '').trim().isEmpty ||
-          RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(v!.trim())
-      ? null
-      : 'Use YYYY-MM-DD';
-
   @override
   Widget build(BuildContext context) {
     const gap = Gap(AppSpacing.md);
@@ -615,19 +599,9 @@ class _QualificationFormState extends ConsumerState<_QualificationForm> {
           gap,
           AppTextField(label: 'Issued by (optional)', controller: _issuer),
           gap,
-          AppTextField(
-            label: 'Issued on (optional)',
-            controller: _issued,
-            hint: 'YYYY-MM-DD',
-            validator: _date,
-          ),
+          AppDateField(label: 'Issued on (optional)', controller: _issued, lastDate: DateTime.now()),
           gap,
-          AppTextField(
-            label: 'Valid until (optional)',
-            controller: _valid,
-            hint: 'YYYY-MM-DD',
-            validator: _date,
-          ),
+          AppDateField(label: 'Valid until (optional)', controller: _valid),
           gap,
           OutlinedButton.icon(
             onPressed: () async {

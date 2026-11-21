@@ -199,11 +199,13 @@ void main() {
     await tapKey(tester, 'edit-operator-profile');
     await type(tester, 'licence-number', 'mh1220150012345');
     await type(tester, 'licence-class', 'HTV');
-    await type(tester, 'licence-expiry', '2020-01-01');
     await type(tester, 'experience', '7');
     await tapKey(tester, 'save-operator-profile');
-    expect(find.text('This licence has expired'), findsOneWidget);
-    await type(tester, 'licence-expiry', '2031-01-01');
+    expect(find.text('Pick a date'), findsOneWidget); // typed dates are gone: the calendar is the only way
+    await tapKey(tester, 'licence-expiry');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
     await tapKey(tester, 'save-operator-profile');
     expect(find.text('Choose at least one machine'), findsOneWidget);
     await tapOn(tester, find.widgetWithText(FilterChip, 'Excavator'));

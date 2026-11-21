@@ -1,3 +1,4 @@
+import '../../../core/utils/app_lifecycle.dart';
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -73,6 +74,7 @@ class LiveTrackController extends AsyncNotifier<LiveTrack> {
 
   /// Reloads the view (keeps the current mode).
   Future<void> refresh() async {
+    if (appInBackground) return;
     try {
       final view = await _api.view(_org, key.$2);
       _set((t) => LiveTrack(view, t.mode, lastUpdate: view.equipment?.recordedAt ?? t.lastUpdate));

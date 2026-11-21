@@ -1112,11 +1112,17 @@ class _ActionsCardState extends ConsumerState<_ActionsCard> {
         gatewayPaymentId: gatewayPaymentId,
         signature: signature,
       );
+      final captured = await _awaitCapture(paymentRecordId);
       if (mounted) {
-        AppToast.success(
-          context,
-          'Payment received. Your booking is confirmed.',
-        );
+        if (captured) {
+          AppToast.success(context, 'Payment received. Your booking is confirmed.');
+        } else {
+          AppToast.show(
+            context,
+            'Payment submitted. We are waiting for the gateway to confirm it; this page updates by itself.',
+            tone: AppTone.info,
+          );
+        }
       }
     } catch (e) {
       if (mounted) AppToast.error(context, describeError(e));
@@ -1126,6 +1132,23 @@ class _ActionsCardState extends ConsumerState<_ActionsCard> {
         refreshBooking(ref, widget.side, b.id);
       }
     }
+  }
+
+  /// A browser or app callback is not proof: the booking is confirmed only once the backend has
+  /// the gateway's own confirmation (direct check or webhook). Polls briefly for it.
+  Future<bool> _awaitCapture(String paymentRecordId) async {
+    for (var i = 0; i < 20 && mounted; i++) {
+      try {
+        final list = await _api.payments(_org, b.id);
+        final p = list.where((x) => x.id == paymentRecordId).firstOrNull;
+        if (p?.status == 'captured') return true;
+        if (p?.status == 'failed') return false;
+      } catch (_) {
+        // Transient network error while waiting for the gateway: retry.
+      }
+      await Future<void>.delayed(const Duration(seconds: 3));
+    }
+    return false;
   }
 
   Future<void> _cancel() async {

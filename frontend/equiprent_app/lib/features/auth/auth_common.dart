@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/utils/validators.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/auth/auth_api.dart';
@@ -64,24 +65,11 @@ final pendingVerificationProvider =
 /// re-validates everything.
 abstract final class AuthValidators {
   static final _email = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
-  static final _e164 = RegExp(r'^\+[1-9][0-9]{7,14}$');
-  static final _indian = RegExp(r'^[6-9][0-9]{9}$');
 
   /// Normalises a mobile number to E.164 (10-digit Indian numbers get +91).
-  static String? normalisePhone(String raw) {
-    final digits = raw.replaceAll(RegExp(r'[\s\-()]'), '');
-    if (_indian.hasMatch(digits)) return '+91$digits';
-    if (digits.startsWith('91') &&
-        digits.length == 12 &&
-        _indian.hasMatch(digits.substring(2))) {
-      return '+$digits';
-    }
-    if (_e164.hasMatch(digits)) return digits;
-    return null;
-  }
+  static String? normalisePhone(String raw) => Validators.normalisePhone(raw);
 
-  static String? phone(String? v) =>
-      normalisePhone(v ?? '') == null ? 'Enter a 10-digit mobile number' : null;
+  static String? phone(String? v) => Validators.phone(v);
 
   static String? email(String? v) =>
       _email.hasMatch((v ?? '').trim()) ? null : 'Enter a valid email address';

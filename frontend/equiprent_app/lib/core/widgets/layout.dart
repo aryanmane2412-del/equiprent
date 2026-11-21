@@ -5,7 +5,6 @@ import 'package:go_router/go_router.dart';
 import '../../features/comms/comms_routes.dart';
 import '../../features/comms/data/comms_api.dart';
 import '../auth/auth_controller.dart';
-import '../mock/mock_data.dart';
 import '../responsive/responsive.dart';
 import '../session/active_role_provider.dart';
 import '../session/user_role.dart';
@@ -15,25 +14,6 @@ import '../localization/app_strings.dart';
 import 'buttons.dart';
 import 'feedback.dart';
 import 'media.dart';
-
-/// Demo identity shown for each role.
-extension RolePersona on UserRole {
-  String get personaName => switch (this) {
-    UserRole.customer => MockData.customerName,
-    UserRole.owner => MockData.ownerName,
-    UserRole.operator => MockData.operatorName,
-    UserRole.fleetManager => MockData.fleetManagerName,
-    UserRole.admin => MockData.adminName,
-  };
-
-  String get personaOrg => switch (this) {
-    UserRole.customer => MockData.customerCompany,
-    UserRole.owner => MockData.ownerCompany,
-    UserRole.operator => MockData.ownerCompany,
-    UserRole.fleetManager => MockData.fleetCompany,
-    UserRole.admin => 'EQUIPRENT Operations',
-  };
-}
 
 /// Standard page: app bar (title, actions, notifications + account on
 /// top-level pages) and body. Detail pages get an automatic back button.
@@ -401,7 +381,7 @@ class AccountMenuButton extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final role = ref.watch(activeRoleProvider) ?? UserRole.customer;
     final name =
-        ref.watch(authControllerProvider).user?.displayName ?? role.personaName;
+        ref.watch(authControllerProvider).user?.displayName ?? 'Account';
     return PopupMenuButton<String>(
       tooltip: 'Account',
       position: PopupMenuPosition.under,
