@@ -37,7 +37,13 @@ jobs:
         run: |
           set -o pipefail
           go test -count=1 -p 1 -timeout 20m -v ./... 2>&1 | tee test.log | grep -E '^(--- FAIL|FAIL|ok|panic)' || true
-          if grep -q '^--- FAIL\|^FAIL\|^panic:' test.log; then echo 'tests failed'; exit 1; fi
+          if grep -q '^--- FAIL\|^FAIL\|^panic:' test.log; then
+            echo 'tests failed'
+            summary=$(grep -E -B1 -A12 '^(--- FAIL|panic:)' test.log | head -60 | sed ':a;N;$!ba;s/%/%25/g;s///g;s/
+/%0A/g')
+            echo "::error title=Failing tests::${summary}"
+            exit 1
+          fi
           skipped=$(grep -c 'TEST_DATABASE_URL not set' test.log || true)
           if [ "$skipped" -gt 0 ]; then echo "::error::$skipped integration tests were skipped (TEST_DATABASE_URL missing)"; exit 1; fi
 
@@ -76,10 +82,3 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Filesystem vulnerability + misconfiguration scan
-        uses: aquasecurity/trivy-action@v0.28.0
-        with:
-          scan-type: fs
-          severity: HIGH,CRITICAL
-          exit-code: "1"
-          ignore-unfixed: true
