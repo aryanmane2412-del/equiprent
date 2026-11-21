@@ -44,7 +44,8 @@ backend/.gocache/
 *.log
 Microsoft/
 backend/var/
-uploads/
+/uploads/
+backend/uploads/
 kyc/
 *.sql.gz
 *.dump
