@@ -115,6 +115,9 @@ type UpdateProfileRequest struct {
 	FullName          *string `json:"full_name" binding:"omitempty,min=2,max=100"`
 	Email             *string `json:"email" binding:"omitempty,email,max=254" doc:"Changing it requires verifying the new address"`
 	PreferredLanguage *string `json:"preferred_language" binding:"omitempty,oneof=en hi mr ta te kn gu bn"`
+	// CurrentPassword is required to replace an already verified email: a
+	// stolen session must not be able to re-point account recovery.
+	CurrentPassword *string `json:"current_password" binding:"omitempty,max=128"`
 }
 
 type CreateOrgRequest struct {

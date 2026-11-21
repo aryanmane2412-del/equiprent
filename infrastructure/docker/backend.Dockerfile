@@ -4,7 +4,7 @@
 #   docker build -f infrastructure/docker/backend.Dockerfile --build-arg TARGET=api    backend
 #   docker build -f infrastructure/docker/backend.Dockerfile --build-arg TARGET=worker backend
 
-ARG GO_VERSION=1.26
+ARG GO_VERSION=1.26.11
 
 FROM golang:${GO_VERSION}-alpine AS build
 WORKDIR /src

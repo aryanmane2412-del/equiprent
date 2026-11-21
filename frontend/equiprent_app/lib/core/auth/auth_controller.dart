@@ -169,9 +169,9 @@ class AuthController extends Notifier<AuthState> {
     if (tokens != null) state = AuthState.signedIn(user, tokens);
   }
 
-  Future<void> updateProfile({String? fullName, String? email}) async {
+  Future<void> updateProfile({String? fullName, String? email, String? currentPassword}) async {
     final updated = await withToken(
-      (token) => _api.updateProfile(token, fullName: fullName, email: email),
+      (token) => _api.updateProfile(token, fullName: fullName, email: email, currentPassword: currentPassword),
     );
     final tokens = state.tokens;
     if (tokens != null) state = AuthState.signedIn(updated, tokens);

@@ -705,6 +705,37 @@ func (s *Service) ChangePassword(ctx context.Context, p *httpx.Principal, req Ch
 	return StatusResponse{Status: "password_changed"}, nil
 }
 
+// ErrReauthUnavailable is returned when a sensitive change needs the current
+// password but the account has none (OTP-only sign-in).
+var ErrReauthUnavailable = apperror.New(403, "REAUTH_REQUIRED", "Set a password in account security before changing a verified email address")
+
+// ConfirmPassword re-authenticates the signed-in user before a sensitive
+// change (replacing a verified email). It shares the change-password attempt
+// counter, so a hijacked session cannot be used to guess the password.
+func (s *Service) ConfirmPassword(ctx context.Context, userID uuid.UUID, plain string, client ClientInfo) error {
+	acct, err := s.repo.AccountByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if !acct.HasPassword() {
+		return ErrReauthUnavailable
+	}
+	key := "auth:change:" + acct.ID.String()
+	n, ttl, err := s.store.Incr(ctx, key, s.cfg.LoginWindow)
+	if err != nil {
+		return err
+	}
+	if n > int64(s.cfg.LoginMaxAttempts) {
+		return errLocked.WithRetryAfter(ttl)
+	}
+	if ok, _ := password.Verify(plain, *acct.PasswordHash); !ok {
+		s.audit(ctx, AuditEvent{Action: "auth.reauth_failed", UserID: acct.ID, IP: client.IP})
+		return errWrongPassword
+	}
+	_ = s.store.Delete(ctx, key)
+	return nil
+}
+
 func (s *Service) setPassword(ctx context.Context, acct Account, plain string) error {
 	personal := []string{acct.FullName, acct.Phone[min(3, len(acct.Phone)):]}
 	if acct.Email != nil {

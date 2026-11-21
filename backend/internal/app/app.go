@@ -172,7 +172,10 @@ func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool, store cache.St
 
 	modules := []httpx.Module{
 		auth.NewHandler(authSvc, authLimit),
-		users.NewHandler(users.NewService(users.NewRepository(pool, tx))),
+		users.NewHandler(users.NewService(users.NewRepository(pool, tx)).WithReauth(
+			func(ctx context.Context, id uuid.UUID, pw string) error {
+				return authSvc.ConfirmPassword(ctx, id, pw, auth.ClientInfo{})
+			})),
 		owners.NewHandler(owners.NewService(owners.NewRepository(pool, tx))),
 		operators.NewHandler(operators.NewService(operators.NewRepository(pool, tx))),
 		equipment.NewHandler(equipmentSvc, auth.OptionalMiddleware(authSvc), equipmentAccess),

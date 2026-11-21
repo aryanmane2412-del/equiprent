@@ -213,9 +213,11 @@ func TestPasswordAuthLifecycle(t *testing.T) {
 		t.Fatalf("me = %s", me.raw)
 	}
 
-	// Changing the email drops its verification (DB trigger).
+	// Changing a VERIFIED email needs the current password, then drops its
+	// verification (DB trigger).
 	newEmail := randomEmail()
-	if r := must(t, u.do(http.MethodPatch, "/me", map[string]any{"email": newEmail}), 200, "change email"); r.body["email_verified"] != false {
+	must(t, u.do(http.MethodPatch, "/me", map[string]any{"email": newEmail}), 400, "change verified email without password")
+	if r := must(t, u.do(http.MethodPatch, "/me", map[string]any{"email": newEmail, "current_password": goodPassword}), 200, "change email"); r.body["email_verified"] != false {
 		t.Fatalf("email change kept verification: %s", r.raw)
 	}
 	sent := must(t, u.do(http.MethodPost, "/auth/email/verification", nil), 202, "resend verification")

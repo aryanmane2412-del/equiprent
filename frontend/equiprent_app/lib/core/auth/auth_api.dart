@@ -31,7 +31,7 @@ abstract class AuthApi {
   Future<void> verifyEmail(String token, String email);
 
   Future<AuthUser> me(String accessToken);
-  Future<AuthUser> updateProfile(String accessToken, {String? fullName, String? email});
+  Future<AuthUser> updateProfile(String accessToken, {String? fullName, String? email, String? currentPassword});
   Future<DevSecret> sendEmailVerification(String accessToken);
   Future<void> changePassword(String accessToken, {String? currentPassword, required String newPassword});
   Future<List<DeviceSession>> sessions(String accessToken);
@@ -150,10 +150,11 @@ class HttpAuthApi implements AuthApi {
       _client.get('/me', headers: _bearer(accessToken), decode: (j) => AuthUser.fromJson(_map(j)));
 
   @override
-  Future<AuthUser> updateProfile(String accessToken, {String? fullName, String? email}) => _client.patch(
+  Future<AuthUser> updateProfile(String accessToken, {String? fullName, String? email, String? currentPassword}) => _client.patch(
         '/me',
         headers: _bearer(accessToken),
-        body: {'full_name': ?fullName, 'email': ?email},
+        // current_password is required by the server to replace a verified email.
+        body: {'full_name': ?fullName, 'email': ?email, 'current_password': ?currentPassword},
         decode: (j) => AuthUser.fromJson(_map(j)),
       );
 

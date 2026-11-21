@@ -29,6 +29,7 @@ class _AccountSecurityPageState extends ConsumerState<AccountSecurityPage> {
   late final TextEditingController _email;
   final _current = TextEditingController();
   final _new = TextEditingController();
+  final _emailPassword = TextEditingController();
   bool _busy = false;
   Object? _error;
   String? _notice;
@@ -42,9 +43,18 @@ class _AccountSecurityPageState extends ConsumerState<AccountSecurityPage> {
     _email = TextEditingController(text: user?.email ?? '');
   }
 
+  /// True when the typed email differs from the user's verified one: the
+  /// server then asks for the current password.
+  bool _replacingVerifiedEmail(AuthUser user) {
+    final current = user.email;
+    if (current == null || !user.emailVerified) return false;
+    final typed = _email.text.trim().toLowerCase();
+    return typed.isNotEmpty && typed != current.toLowerCase();
+  }
+
   @override
   void dispose() {
-    for (final c in [_name, _email, _current, _new]) {
+    for (final c in [_name, _email, _current, _new, _emailPassword]) {
       c.dispose();
     }
     super.dispose();
@@ -119,8 +129,20 @@ class _AccountSecurityPageState extends ConsumerState<AccountSecurityPage> {
                       controller: _email,
                       keyboardType: TextInputType.emailAddress,
                       helper: 'Changing it requires verifying the new address.',
+                      onChanged: (_) => setState(() {}),
                       validator: (v) => (v ?? '').trim().isEmpty ? null : AuthValidators.email(v),
                     ),
+                    if (_replacingVerifiedEmail(user)) ...[
+                      const Gap(AppSpacing.md),
+                      AppTextField(
+                        key: const ValueKey('profile-email-password'),
+                        label: 'Current password',
+                        controller: _emailPassword,
+                        obscureText: true,
+                        helper: 'Required to replace your verified email.',
+                        validator: (v) => (v ?? '').isEmpty ? 'Enter your current password' : null,
+                      ),
+                    ],
                     const Gap(AppSpacing.md),
                     Wrap(spacing: AppSpacing.sm, runSpacing: AppSpacing.sm, children: [
                       AppButton(
@@ -133,7 +155,11 @@ class _AccountSecurityPageState extends ConsumerState<AccountSecurityPage> {
                                 if (!(_profileForm.currentState?.validate() ?? false)) return;
                                 final email = _email.text.trim();
                                 _run(() async {
-                                  await _auth.withToken((t) => _api.updateProfile(t, fullName: _name.text.trim(), email: email.isEmpty ? null : email));
+                                  await _auth.withToken((t) => _api.updateProfile(t,
+                                      fullName: _name.text.trim(),
+                                      email: email.isEmpty ? null : email,
+                                      currentPassword: _replacingVerifiedEmail(user) ? _emailPassword.text : null));
+                                  _emailPassword.clear();
                                   await _auth.reloadUser();
                                 }, success: 'Profile saved.');
                               },

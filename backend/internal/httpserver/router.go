@@ -98,6 +98,8 @@ func NewRouter(d Deps) *gin.Engine {
 			APIPrefix + "/uploads": max(d.Config.Storage.MaxUploadBytes, d.Config.HTTP.MaxBodyBytes) + 256<<10,
 		}),
 		errorMiddleware(d.Logger),
+		rejectNULInURL(),
+		rejectNULInBody(),
 	)
 
 	r.NoRoute(func(c *gin.Context) { Fail(c, apperror.ErrNotFound) })

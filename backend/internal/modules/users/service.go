@@ -15,9 +15,22 @@ import (
 var gstinPattern = regexp.MustCompile(`^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$`)
 
 // Service implements profile and organisation use cases.
-type Service struct{ repo Repository }
+type Service struct {
+	repo   Repository
+	reauth func(ctx context.Context, userID uuid.UUID, password string) error
+}
 
 func NewService(repo Repository) *Service { return &Service{repo: repo} }
+
+// WithReauth sets the password re-authentication used before a verified email
+// is replaced. Without it such a change is refused (fail closed).
+func (s *Service) WithReauth(f func(ctx context.Context, userID uuid.UUID, password string) error) *Service {
+	s.reauth = f
+	return s
+}
+
+var errPasswordRequired = apperror.ErrValidation.WithFields(apperror.FieldError{
+	Field: "current_password", Code: "required", Message: "enter your current password to change your verified email"})
 
 // Me returns the caller's profile with roles.
 func (s *Service) Me(ctx context.Context, p *httpx.Principal) (Profile, error) {
@@ -37,6 +50,25 @@ func (s *Service) UpdateMe(ctx context.Context, p *httpx.Principal, req UpdatePr
 	if req.Email != nil {
 		lower := strings.ToLower(strings.TrimSpace(*req.Email))
 		req.Email = &lower
+		cur, err := s.repo.User(ctx, p.UserID)
+		if err != nil {
+			return Profile{}, err
+		}
+		switch {
+		case cur.Email != nil && strings.EqualFold(*cur.Email, lower):
+			req.Email = nil // unchanged: the app resends it on every save
+		case cur.Email != nil && cur.EmailVerifiedAt != nil:
+			// Replacing a verified address re-points password reset: re-authenticate.
+			if s.reauth == nil {
+				return Profile{}, apperror.ErrForbidden.WithDetail("changing a verified email is not available")
+			}
+			if req.CurrentPassword == nil || *req.CurrentPassword == "" {
+				return Profile{}, errPasswordRequired
+			}
+			if err := s.reauth(ctx, p.UserID, *req.CurrentPassword); err != nil {
+				return Profile{}, err
+			}
+		}
 	}
 	u, err := s.repo.UpdateProfile(ctx, db.UpdateUserProfileParams{
 		ID: p.UserID, FullName: req.FullName, Email: req.Email, PreferredLanguage: req.PreferredLanguage,

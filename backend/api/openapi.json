@@ -12653,6 +12653,13 @@
       "users.UpdateProfileRequest": {
         "type": "object",
         "properties": {
+          "current_password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maximum": 128
+          },
           "email": {
             "type": [
               "string",

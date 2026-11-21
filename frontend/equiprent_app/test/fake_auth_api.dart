@@ -179,6 +179,7 @@ class FakeAuthApi implements AuthApi {
     String accessToken, {
     String? fullName,
     String? email,
+    String? currentPassword,
   }) => me(accessToken);
 
   @override
