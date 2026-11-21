@@ -61,7 +61,7 @@ class AppButton extends StatelessWidget {
     final enabled = onPressed != null && !isLoading;
     final (Color bg, Color fg, BorderSide? border) = switch (variant) {
       AppButtonVariant.primary => (AppColors.navy700, AppColors.white, null),
-      AppButtonVariant.accent => (AppColors.orange600, AppColors.navy950, null),
+      AppButtonVariant.accent => (AppColors.orange600, AppColors.onAccent, null),
       AppButtonVariant.danger => (AppColors.red600, AppColors.white, null),
       AppButtonVariant.success => (AppColors.green700, AppColors.white, null),
       AppButtonVariant.secondary => (AppColors.white, AppColors.navy700, const BorderSide(color: AppColors.slate300)),

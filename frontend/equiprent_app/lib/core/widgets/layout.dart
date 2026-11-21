@@ -1,3 +1,4 @@
+import 'brand_logo.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -48,25 +49,11 @@ class AppPage extends StatelessWidget {
       appBar: AppBar(
         toolbarHeight: 64,
         automaticallyImplyLeading: !topLevel,
-        leadingWidth: topLevel ? 132 : null,
-        leading: topLevel
-            ? Padding(
-                padding: const EdgeInsets.only(left: AppSpacing.sm),
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Image.asset(
-                      'assets/images/logo.png',
-                      height: 34,
-                      semanticLabel: 'EQUIPRENT',
-                      errorBuilder: (_, _, _) => const SizedBox.shrink(),
-                    ),
-                  ),
-                ),
+        leadingWidth: topLevel && context.windowSize.isCompact ? 104 : null,
+        leading: topLevel && context.windowSize.isCompact
+            ? const Padding(
+                padding: EdgeInsets.only(left: AppSpacing.sm),
+                child: Center(child: BrandLogo(compact: true)),
               )
             : null,
         title: Column(
@@ -88,6 +75,7 @@ class AppPage extends StatelessWidget {
         actions: [
           ...actions,
           if (topLevel) ...[
+            const RoleBadge(),
             const MessagesButton(),
             const CustomerCareButton(),
             const NotificationsButton(),
@@ -453,4 +441,42 @@ class _MenuRow extends StatelessWidget {
       Text(label),
     ],
   );
+}
+
+/// Distinct role identity pill (SiteFleet design): amber customer, navy owner,
+/// orange-tint driver, green fleet manager, brown admin. Icon-only on phones.
+class RoleBadge extends ConsumerWidget {
+  const RoleBadge({super.key});
+
+  static (Color, Color, String) styleOf(UserRole r) => switch (r) {
+    UserRole.customer => (AppColors.orange600, AppColors.onAccent, 'Customer'),
+    UserRole.owner => (AppColors.navy700, AppColors.white, 'Owner'),
+    UserRole.operator => (AppColors.warningContainer, AppColors.onWarningContainer, 'Driver'),
+    UserRole.fleetManager => (AppColors.green700, AppColors.white, 'Fleet'),
+    UserRole.admin => (AppColors.adminBrown, AppColors.white, 'Admin'),
+  };
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final role = ref.watch(activeRoleProvider);
+    if (role == null) return const SizedBox.shrink();
+    final (bg, fg, name) = styleOf(role);
+    final compact = context.windowSize.isCompact;
+    return Semantics(
+      label: '$name panel',
+      child: Container(
+        key: const Key('role-badge'),
+        margin: const EdgeInsets.symmetric(horizontal: 4),
+        padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12, vertical: 6),
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(role.icon, size: 16, color: fg),
+          if (!compact) ...[
+            const SizedBox(width: 6),
+            Text('$name panel', style: TextStyle(color: fg, fontSize: 12, fontWeight: FontWeight.w600)),
+          ],
+        ]),
+      ),
+    );
+  }
 }

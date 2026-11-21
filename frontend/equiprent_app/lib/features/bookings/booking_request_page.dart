@@ -90,7 +90,16 @@ class _BookingRequestPageState extends ConsumerState<BookingRequestPage> {
     _key = newClientId();
   });
 
-  bool _operatorFor(Listing l) => _withOperator ?? (l.wetHire && !l.dryHire);
+  bool _operatorFor(Listing l) {
+    if (_withOperator != null) return _withOperator!;
+    // Follow the prices the owner actually set: a machine priced only with an
+    // operator cannot be requested without one (the server has no rate).
+    final dry = l.pricing.any((p) => !p.withOperator);
+    final wet = l.pricing.any((p) => p.withOperator);
+    if (l.pricing.isNotEmpty && !dry && wet) return true;
+    if (l.pricing.isNotEmpty && dry && !wet) return false;
+    return l.wetHire && !l.dryHire;
+  }
   bool _deliveryFor(Listing l) => l.delivery && (_delivery ?? true);
 
   BookingChoice _choice(Listing l) => BookingChoice(
@@ -586,6 +595,10 @@ class _BookingRequestPageState extends ConsumerState<BookingRequestPage> {
           Text(
             _site == null
                 ? 'Choose a work site'
+                : est.isLoading
+                ? 'Checking availability…'
+                : est.hasError
+                ? describeError(est.error!)
                 : (ok
                       ? 'incl. taxes · final bill after return'
                       : 'Dates unavailable'),

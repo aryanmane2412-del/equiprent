@@ -18,7 +18,7 @@ double contrast(Color a, Color b) {
 
 void main() {
   test('accent (amber) buttons use text that meets WCAG AA 4.5:1', () {
-    expect(contrast(AppColors.navy950, AppColors.orange600), greaterThanOrEqualTo(4.5));
+    expect(contrast(AppColors.onAccent, AppColors.orange600), greaterThanOrEqualTo(4.5));
   });
   test('hint and helper greys meet AA on white', () {
     expect(contrast(AppColors.slate600, AppColors.white), greaterThanOrEqualTo(4.5));

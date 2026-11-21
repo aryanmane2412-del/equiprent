@@ -95,9 +95,9 @@ abstract final class AppTheme {
     primaryContainer: AppColors.navy100,
     onPrimaryContainer: AppColors.navy900,
     secondary: AppColors.orange600,
-    onSecondary: AppColors.white,
-    secondaryContainer: AppColors.orange100,
-    onSecondaryContainer: Color(0xFF7C2D12),
+    onSecondary: AppColors.onAccent,
+    secondaryContainer: AppColors.orange600,
+    onSecondaryContainer: AppColors.onAccent,
     tertiary: AppColors.green700,
     onTertiary: AppColors.white,
     tertiaryContainer: AppColors.green100,
@@ -400,11 +400,11 @@ abstract final class AppTheme {
       ),
       badgeTheme: const BadgeThemeData(
         backgroundColor: AppColors.orange600,
-        textColor: AppColors.navy950,
+        textColor: AppColors.onAccent,
       ),
       floatingActionButtonTheme: const FloatingActionButtonThemeData(
         backgroundColor: AppColors.orange600,
-        foregroundColor: AppColors.navy950,
+        foregroundColor: AppColors.onAccent,
         elevation: 2,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.all(Radius.circular(AppRadius.lg)),

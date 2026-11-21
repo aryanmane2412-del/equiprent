@@ -12,8 +12,8 @@ abstract final class AppColors {
   // Navy (brand)
   static const navy950 = Color(0xFF0A1628);
   static const navy900 = Color(0xFF0F1F3A);
-  static const navy800 = Color(0xFF15294B);
-  static const navy700 = Color(0xFF1C3A6B);
+  static const navy800 = Color(0xFF1E3A5F);
+  static const navy700 = Color(0xFF022448);
   static const navy600 = Color(0xFF24508F);
   static const navy500 = Color(0xFF2F64B0);
   static const navy200 = Color(0xFFC7D5EA);
@@ -22,13 +22,13 @@ abstract final class AppColors {
 
   // Orange (accent / primary CTA)
   static const orange700 = Color(0xFFC2410C);
-  static const orange600 = Color(0xFFF59E0B);
-  static const orange500 = Color(0xFFFFAB10);
+  static const orange600 = Color(0xFFFE932C);
+  static const orange500 = Color(0xFFFE932C);
   static const orange100 = Color(0xFFFFEDD5);
   static const orange50 = Color(0xFFFFF7ED);
 
   // Green (success / money / available)
-  static const green700 = Color(0xFF15803D);
+  static const green700 = Color(0xFF146C2E);
   static const green600 = Color(0xFF16A34A);
   static const green100 = Color(0xFFDCFCE7);
   static const green50 = Color(0xFFF0FDF4);
@@ -48,7 +48,7 @@ abstract final class AppColors {
 
   // Semantic
   static const red700 = Color(0xFFB91C1C);
-  static const red600 = Color(0xFFDC2626);
+  static const red600 = Color(0xFFBA1A1A);
   static const red100 = Color(0xFFFEE2E2);
   static const amber700 = Color(0xFFB45309);
   static const amber600 = Color(0xFFD97706);
@@ -57,7 +57,14 @@ abstract final class AppColors {
   static const blue100 = Color(0xFFDBEAFE);
 
   /// App canvas behind cards.
-  static const canvas = Color(0xFFF5F7FB);
+  static const canvas = Color(0xFFFAF9FC);
+
+  /// Text/icons on amber surfaces (SiteFleet on-secondary-container, ~8:1).
+  static const onAccent = Color(0xFF2F1500);
+  /// Admin role identity (SiteFleet tertiary).
+  static const adminBrown = Color(0xFF341F00);
+  static const warningContainer = Color(0xFFFFE8CC);
+  static const onWarningContainer = Color(0xFF5A3200);
 
   // Role aliases used by components.
   static const brand = navy700;
