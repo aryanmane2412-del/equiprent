@@ -48,7 +48,7 @@ func TestRentalLifecycle(t *testing.T) {
 	if len(models.list("data")) == 0 {
 		t.Fatal("no seeded excavator models")
 	}
-	reg := fmt.Sprintf("MH12%s%04d", randomLetters(2), rand.IntN(10000))
+	reg := fmt.Sprintf("MH12%s%04d", randomLetters(3), rand.IntN(10000))
 	eq := must(t, owner.do(http.MethodPost, "/owner/equipment", map[string]any{
 		"model_id": models.str("data.0.id"), "title": "Tata Hitachi EX200 with operator",
 		"registration_no": reg, "current_hmr": 4210.5, "base_location": yard, "service_radius_km": 60,

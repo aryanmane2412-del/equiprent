@@ -346,7 +346,7 @@ func TestOwnerVerificationWorkflow(t *testing.T) {
 	// Unverified owners cannot publish listings.
 	models := must(t, owner.do(http.MethodGet, "/models?category=excavator", nil), 200, "models")
 	eq := must(t, owner.do(http.MethodPost, "/owner/equipment", map[string]any{
-		"model_id": models.str("data.0.id"), "title": "JCB 3DX backhoe loader", "registration_no": fmt.Sprintf("MH14%s%04d", randomLetters(2), rand.IntN(10000)),
+		"model_id": models.str("data.0.id"), "title": "JCB 3DX backhoe loader", "registration_no": fmt.Sprintf("MH14%s%04d", randomLetters(3), rand.IntN(10000)),
 		"current_hmr": 1200, "base_location": yard, "service_radius_km": 40,
 	}), 201, "listing")
 	must(t, owner.do(http.MethodPut, "/owner/equipment/"+eq.str("id")+"/pricing", map[string]any{
@@ -477,7 +477,7 @@ func TestFleetManagerEquipmentAccess(t *testing.T) {
 	models := must(t, owner.do(http.MethodGet, "/models?category=excavator", nil), 200, "models")
 	machine := func(u *user, title string) string {
 		return must(t, u.do(http.MethodPost, "/owner/equipment", map[string]any{
-			"model_id": models.str("data.0.id"), "title": title, "registration_no": fmt.Sprintf("MH12%s%04d", randomLetters(2), rand.IntN(10000)),
+			"model_id": models.str("data.0.id"), "title": title, "registration_no": fmt.Sprintf("MH12%s%04d", randomLetters(3), rand.IntN(10000)),
 			"current_hmr": 100, "base_location": yard, "service_radius_km": 30,
 		}), 201, "create "+title).str("id")
 	}

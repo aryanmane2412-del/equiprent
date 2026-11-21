@@ -57,7 +57,7 @@ func listingBody(extra map[string]any) map[string]any {
 	b := map[string]any{
 		"title": "Liugong 835H wheel loader for hire", "category": "wheel-loader", "manufacturer": "Liugong", "model": "835H",
 		"manufacture_year": 2021, "condition": "excellent", "delivery_available": true, "location_label": "Chakan MIDC, Pune",
-		"registration_no": fmt.Sprintf("MH14%s%04d", randomLetters(2), rand.IntN(10000)),
+		"registration_no": fmt.Sprintf("MH14%s%04d", randomLetters(3), rand.IntN(10000)),
 		"current_hmr":     2150, "base_location": yard, "service_radius_km": 40, "dry_hire": true,
 		"description": "Well maintained loader, 1.8 m³ bucket, serviced every 250 hours.",
 	}

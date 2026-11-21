@@ -5,6 +5,8 @@ package database
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -29,6 +31,17 @@ func NewPool(ctx context.Context, cfg config.DatabaseConfig, applicationName str
 	pcfg.ConnConfig.RuntimeParams["application_name"] = applicationName
 	// Store and compare in UTC; clients convert to IST for display.
 	pcfg.ConnConfig.RuntimeParams["timezone"] = "UTC"
+	// Fail fast instead of hanging: a stuck query, a long lock wait or a transaction left open
+	// by a crashed client must not hold a request or a worker job.
+	for param, d := range map[string]time.Duration{
+		"statement_timeout":                   cfg.StatementTimeout,
+		"lock_timeout":                        cfg.LockTimeout,
+		"idle_in_transaction_session_timeout": cfg.IdleInTxTimeout,
+	} {
+		if d > 0 {
+			pcfg.ConnConfig.RuntimeParams[param] = strconv.FormatInt(d.Milliseconds(), 10)
+		}
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, pcfg)
 	if err != nil {

@@ -277,6 +277,14 @@ type DatabaseConfig struct {
 	MaxConnLifetime time.Duration
 	MaxConnIdleTime time.Duration
 	ConnectTimeout  time.Duration
+
+	// Server-side guards, so a stuck query or lock fails fast instead of holding a request or a
+	// worker job: StatementTimeout cancels any single statement that runs this long, LockTimeout
+	// gives up waiting for a lock, IdleInTxTimeout ends a session that left a transaction open.
+	// 0 disables the guard.
+	StatementTimeout time.Duration
+	LockTimeout      time.Duration
+	IdleInTxTimeout  time.Duration
 }
 
 type RedisConfig struct {
@@ -368,12 +376,15 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 			Format: strings.ToLower(l.str("LOG_FORMAT", defaultLogFormat)),
 		},
 		Database: DatabaseConfig{
-			URL:             l.required("DATABASE_URL"),
-			MaxConns:        int32(l.int("DB_MAX_CONNS", 10)),
-			MinConns:        int32(l.int("DB_MIN_CONNS", 0)),
-			MaxConnLifetime: l.duration("DB_MAX_CONN_LIFETIME", time.Hour),
-			MaxConnIdleTime: l.duration("DB_MAX_CONN_IDLE_TIME", 30*time.Minute),
-			ConnectTimeout:  l.duration("DB_CONNECT_TIMEOUT", 5*time.Second),
+			URL:              l.required("DATABASE_URL"),
+			MaxConns:         int32(l.int("DB_MAX_CONNS", 10)),
+			MinConns:         int32(l.int("DB_MIN_CONNS", 0)),
+			MaxConnLifetime:  l.duration("DB_MAX_CONN_LIFETIME", time.Hour),
+			MaxConnIdleTime:  l.duration("DB_MAX_CONN_IDLE_TIME", 30*time.Minute),
+			ConnectTimeout:   l.duration("DB_CONNECT_TIMEOUT", 5*time.Second),
+			StatementTimeout: l.duration("DB_STATEMENT_TIMEOUT", 25*time.Second),
+			LockTimeout:      l.duration("DB_LOCK_TIMEOUT", 10*time.Second),
+			IdleInTxTimeout:  l.duration("DB_IDLE_TX_TIMEOUT", 60*time.Second),
 		},
 		Redis: RedisConfig{URL: l.str("REDIS_URL", "")},
 		CORS: CORSConfig{

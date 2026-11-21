@@ -114,11 +114,22 @@ func (j Jobs) All() []Job {
 // cannot block the queue.
 func (j Jobs) DispatchOutbox(ctx context.Context) error {
 	q := j.q(ctx)
-	evs, err := q.ClaimOutboxEvents(ctx, 100)
+	evs, err := q.ClaimOutboxEvents(ctx, outboxBatch)
 	if err != nil {
 		return err
 	}
-	for _, e := range evs {
+	var slowest time.Duration
+	for i, e := range evs {
+		// A run is one transaction under a time limit. If the limit hits mid-batch everything rolls
+		// back and the same events are claimed again, so a slow backlog (a burst, a busy database)
+		// would never be delivered and notifications would stop for everyone. Stop before starting an
+		// event that may not finish, commit what is delivered, and let the next run continue. The
+		// first event is always attempted, so every run makes progress.
+		if dl, ok := ctx.Deadline(); ok && i > 0 && time.Until(dl) < 2*slowest {
+			j.Log.Debug("outbox run is out of time; the rest waits for the next run", "delivered", i, "left", len(evs)-i)
+			break
+		}
+		started := time.Now()
 		n, err := j.Dispatcher.Dispatch(events.WithEventID(ctx, e.ID), e.EventType, e.AggregateID, e.Payload)
 		var syntaxErr *json.SyntaxError
 		var typeErr *json.UnmarshalTypeError
@@ -133,9 +144,14 @@ func (j Jobs) DispatchOutbox(ctx context.Context) error {
 		if err := q.MarkOutboxPublished(ctx, e.ID); err != nil {
 			return err
 		}
+		slowest = max(slowest, time.Since(started))
 	}
 	return nil
 }
+
+// outboxBatch is how many outbox events one run claims. Small enough that a run finishes inside
+// its time limit even when each event is slow.
+const outboxBatch = 50
 
 // ExpireRequests expires booking requests whose owner missed the response
 // SLA and announces it.
