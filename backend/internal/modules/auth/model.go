@@ -241,6 +241,7 @@ type ChangePasswordRequest struct {
 
 // VerifyEmailRequest proves email ownership.
 type VerifyEmailRequest struct {
+	Email string `json:"email" binding:"required,email,max=254"`
 	Token string `json:"token" binding:"required,min=6,max=200"`
 }
 

@@ -56,6 +56,7 @@ func TestRoleAccessMatrix(t *testing.T) {
 	must(t, owner.do(http.MethodPost, "/orgs/"+owner.org+"/members", map[string]any{"phone": fleetPhone, "role": "fleet_manager"}), 201, "add fleet manager")
 	must(t, owner.do(http.MethodPost, "/orgs/"+owner.org+"/members", map[string]any{"phone": opPhone, "role": "operator"}), 201, "add operator")
 	fleet, operator := e.login(fleetPhone), e.login(opPhone)
+	e.acceptInvitations(operator)
 
 	ops, super := e.login(randomPhone()), e.login(randomPhone())
 	e.exec(`INSERT INTO user_roles (user_id, role_code) VALUES ($1, 'admin_ops')`, ops.id)
@@ -204,7 +205,7 @@ func TestPasswordAuthLifecycle(t *testing.T) {
 	if r := login(email, goodPassword); r.code != 403 || r.str("code") != "VERIFICATION_REQUIRED" {
 		t.Fatalf("unverified email login: %d %s", r.code, r.raw)
 	}
-	must(t, e.call(http.MethodPost, "/auth/email/verify", "", "", map[string]any{"token": reg.str("dev_email_token")}, nil), 200, "verify email")
+	must(t, e.call(http.MethodPost, "/auth/email/verify", "", "", map[string]any{"email": email, "token": reg.str("dev_email_token")}, nil), 200, "verify email")
 	tok := must(t, login(strings.ToUpper(email), goodPassword), 200, "email login")
 	u := &user{e: e, token: tok.str("access_token"), id: tok.str("user.id")}
 	me := must(t, u.do(http.MethodGet, "/me", nil), 200, "me")
@@ -219,7 +220,7 @@ func TestPasswordAuthLifecycle(t *testing.T) {
 	}
 	sent := must(t, u.do(http.MethodPost, "/auth/email/verification", nil), 202, "resend verification")
 	must(t, u.do(http.MethodPost, "/auth/email/verification", nil), 429, "resend cooldown")
-	must(t, e.call(http.MethodPost, "/auth/email/verify", "", "", map[string]any{"token": sent.str("dev_token")}, nil), 200, "verify new email")
+	must(t, e.call(http.MethodPost, "/auth/email/verify", "", "", map[string]any{"email": newEmail, "token": sent.str("dev_token")}, nil), 200, "verify new email")
 
 	// Change password; other sessions are signed out.
 	other := must(t, login(newEmail, goodPassword), 200, "second device")

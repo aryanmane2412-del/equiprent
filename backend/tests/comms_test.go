@@ -181,6 +181,7 @@ func TestNotificationsModule(t *testing.T) {
 	opPhone := randomPhone()
 	must(t, r.owner.do(http.MethodPost, "/orgs/"+r.owner.org+"/members", map[string]any{"phone": opPhone, "role": "operator", "full_name": "Suresh"}), 201, "add operator")
 	op := e.login(opPhone)
+	e.acceptInvitations(op)
 	e.verifyOperator(op, r.kyc)
 	must(t, r.owner.do(http.MethodPost, "/owner/bookings/"+r.id+"/assign-operator", map[string]any{"operator_user_id": op.id}), 200, "assign")
 	e.drain(t)

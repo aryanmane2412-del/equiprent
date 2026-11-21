@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -22,6 +23,7 @@ import (
 	"github.com/equiprent/backend/internal/db"
 	"github.com/equiprent/backend/internal/events"
 	"github.com/equiprent/backend/internal/httpx"
+	"github.com/equiprent/backend/internal/ledger"
 	"github.com/equiprent/backend/internal/modules/bookings"
 )
 
@@ -82,22 +84,45 @@ type Repository interface {
 	Captured(ctx context.Context, bookingID uuid.UUID) (int64, error)
 	Capture(ctx context.Context, id uuid.UUID, gatewayPaymentID, method string) (Payment, bool, error)
 	Fail(ctx context.Context, id uuid.UUID, code, reason string) error
-	RecordWebhook(ctx context.Context, p db.InsertWebhookEventParams) (uuid.UUID, bool, error)
+	RecordWebhook(ctx context.Context, p db.ClaimWebhookEventParams) (uuid.UUID, bool, error)
 	MarkWebhook(ctx context.Context, id uuid.UUID, errMsg *string) error
+	RetryableWebhooks(ctx context.Context, max, batch int32) ([]db.ListRetryableWebhooksRow, error)
+	ClaimWebhook(ctx context.Context, id uuid.UUID) ([]byte, bool, error)
+	OpenFor(ctx context.Context, bookingID uuid.UUID, purpose string) (Payment, bool, error)
+	OtherCaptured(ctx context.Context, bookingID uuid.UUID, purpose string, exclude uuid.UUID) (int, error)
+	Lock(ctx context.Context, key string) error
 	Emit(ctx context.Context, paymentID uuid.UUID, eventType string, p events.Payload) error
 }
 
 // refundQueries is the refund worker's view of the database (generated
 // queries, run in the job's transaction).
 type refundQueries interface {
-	ClaimPendingRefunds(ctx context.Context, batchSize int32) ([]db.ClaimPendingRefundsRow, error)
+	ClaimRefundsForSubmit(ctx context.Context, arg db.ClaimRefundsForSubmitParams) ([]db.ClaimRefundsForSubmitRow, error)
 	MarkRefundSubmitted(ctx context.Context, arg db.MarkRefundSubmittedParams) error
-	MarkRefundAttemptFailed(ctx context.Context, arg db.MarkRefundAttemptFailedParams) error
+	MarkRefundRetry(ctx context.Context, arg db.MarkRefundRetryParams) error
+	SubmittedRefundsToCheck(ctx context.Context, batchSize int32) ([]db.SubmittedRefundsToCheckRow, error)
+	TouchRefundCheck(ctx context.Context, id uuid.UUID) error
+	GetRefundLedgerInfo(ctx context.Context, id uuid.UUID) (db.GetRefundLedgerInfoRow, error)
 	MarkRefundProcessed(ctx context.Context, arg db.MarkRefundProcessedParams) (uuid.UUID, error)
 	MarkRefundFailed(ctx context.Context, arg db.MarkRefundFailedParams) (uuid.UUID, error)
 	GetRefundByGatewayID(ctx context.Context, gatewayRefundID *string) (db.GetRefundByGatewayIDRow, error)
 	FinishRefundedBookings(ctx context.Context, batchSize int32) ([]db.FinishRefundedBookingsRow, error)
 	InsertOutboxEvent(ctx context.Context, arg db.InsertOutboxEventParams) error
+	CreateRefund(ctx context.Context, arg db.CreateRefundParams) (uuid.UUID, error)
+	// ledger
+	EnsureLedgerAccount(ctx context.Context, arg db.EnsureLedgerAccountParams) (uuid.UUID, error)
+	InsertLedgerTransaction(ctx context.Context, arg db.InsertLedgerTransactionParams) (uuid.UUID, error)
+	InsertLedgerEntry(ctx context.Context, arg db.InsertLedgerEntryParams) error
+	// security deposits
+	InsertSecurityDeposit(ctx context.Context, arg db.InsertSecurityDepositParams) error
+	GetDepositForUpdate(ctx context.Context, id uuid.UUID) (db.SecurityDeposit, error)
+	ResolveDeposit(ctx context.Context, arg db.ResolveDepositParams) (db.SecurityDeposit, error)
+	DepositsToRelease(ctx context.Context, arg db.DepositsToReleaseParams) ([]db.SecurityDeposit, error)
+	ApprovedDamageDeductions(ctx context.Context, arg db.ApprovedDamageDeductionsParams) (int64, error)
+	HeldDepositsOfCancelled(ctx context.Context, lim int32) ([]db.SecurityDeposit, error)
+	ProcessedRefundTotal(ctx context.Context, paymentID uuid.UUID) (int64, error)
+	DepositRefundedOnCancel(ctx context.Context, arg db.DepositRefundedOnCancelParams) error
+	RefundablePayment(ctx context.Context, id uuid.UUID) (db.RefundablePaymentRow, error)
 }
 
 type PGRepository struct{ pool *pgxpool.Pool }
@@ -182,9 +207,10 @@ func (r *PGRepository) Fail(ctx context.Context, id uuid.UUID, code, reason stri
 	return database.MapError(err)
 }
 
-// RecordWebhook stores a delivery; isNew=false for a duplicate.
-func (r *PGRepository) RecordWebhook(ctx context.Context, p db.InsertWebhookEventParams) (uuid.UUID, bool, error) {
-	id, err := r.q(ctx).InsertWebhookEvent(ctx, p)
+// RecordWebhook claims a delivery for processing. isNew=false when it is already
+// processed or being processed (a failed or stale one is claimed again).
+func (r *PGRepository) RecordWebhook(ctx context.Context, p db.ClaimWebhookEventParams) (uuid.UUID, bool, error) {
+	id, err := r.q(ctx).ClaimWebhookEvent(ctx, p)
 	if err != nil {
 		err = database.MapError(err)
 		if errors.Is(err, apperror.ErrNotFound) {
@@ -195,8 +221,53 @@ func (r *PGRepository) RecordWebhook(ctx context.Context, p db.InsertWebhookEven
 	return id, true, nil
 }
 
+// MarkWebhook records the outcome: processed when errMsg is nil, else failed (retryable).
 func (r *PGRepository) MarkWebhook(ctx context.Context, id uuid.UUID, errMsg *string) error {
-	return database.MapError(r.q(ctx).MarkWebhookProcessed(ctx, db.MarkWebhookProcessedParams{ID: id, Error: errMsg}))
+	if errMsg == nil {
+		return database.MapError(r.q(ctx).MarkWebhookProcessed(ctx, id))
+	}
+	return database.MapError(r.q(ctx).MarkWebhookFailed(ctx, db.MarkWebhookFailedParams{ID: id, Error: errMsg}))
+}
+
+func (r *PGRepository) RetryableWebhooks(ctx context.Context, max, batch int32) ([]db.ListRetryableWebhooksRow, error) {
+	rows, err := r.q(ctx).ListRetryableWebhooks(ctx, db.ListRetryableWebhooksParams{MaxAttempts: max, Batch: batch})
+	return rows, database.MapError(err)
+}
+
+func (r *PGRepository) ClaimWebhook(ctx context.Context, id uuid.UUID) ([]byte, bool, error) {
+	body, err := r.q(ctx).ClaimWebhookByID(ctx, id)
+	if err != nil {
+		err = database.MapError(err)
+		if errors.Is(err, apperror.ErrNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return body, true, nil
+}
+
+// OpenFor returns the unpaid (created/authorized) payment for a booking and purpose.
+func (r *PGRepository) OpenFor(ctx context.Context, bookingID uuid.UUID, purpose string) (Payment, bool, error) {
+	row, err := r.q(ctx).GetOpenBookingPayment(ctx, db.GetOpenBookingPaymentParams{BookingID: bookingID, Purpose: db.PaymentPurpose(purpose)})
+	if err != nil {
+		err = database.MapError(err)
+		if errors.Is(err, apperror.ErrNotFound) {
+			return Payment{}, false, nil
+		}
+		return Payment{}, false, err
+	}
+	return toPayment(row), true, nil
+}
+
+func (r *PGRepository) OtherCaptured(ctx context.Context, bookingID uuid.UUID, purpose string, exclude uuid.UUID) (int, error) {
+	n, err := r.q(ctx).CountOtherCapturedPayments(ctx, db.CountOtherCapturedPaymentsParams{
+		BookingID: bookingID, Purpose: db.PaymentPurpose(purpose), ExcludeID: exclude})
+	return int(n), database.MapError(err)
+}
+
+// Lock serialises concurrent work on one key until the transaction ends.
+func (r *PGRepository) Lock(ctx context.Context, key string) error {
+	return database.MapError(r.q(ctx).LockPaymentKey(ctx, key))
 }
 
 func (r *PGRepository) Emit(ctx context.Context, id uuid.UUID, eventType string, p events.Payload) error {
@@ -275,6 +346,28 @@ func (s *Service) Create(ctx context.Context, p *httpx.Principal, bookingID uuid
 	if b.PaymentMode != "online" {
 		return Checkout{}, apperror.ErrBusinessRule.WithDetail("this booking is paid offline")
 	}
+	// One unpaid order per advance/deposit: a retry with a new key reuses it.
+	once := req.Purpose == "advance" || req.Purpose == "deposit"
+	if once {
+		if open, ok, err := s.repo.OpenFor(ctx, b.ID, req.Purpose); err != nil {
+			return Checkout{}, err
+		} else if ok {
+			return s.checkout(open), nil
+		}
+		if n, err := s.repo.OtherCaptured(ctx, b.ID, req.Purpose, uuid.Nil); err != nil {
+			return Checkout{}, err
+		} else if n > 0 {
+			return Checkout{}, apperror.ErrBusinessRule.WithDetail("the " + req.Purpose + " is already paid")
+		}
+		// The advance already includes the deposit, so a captured advance covers it.
+		if req.Purpose == "deposit" {
+			if n, err := s.repo.OtherCaptured(ctx, b.ID, "advance", uuid.Nil); err != nil {
+				return Checkout{}, err
+			} else if n > 0 {
+				return Checkout{}, apperror.ErrBusinessRule.WithDetail("the deposit is already paid with the advance")
+			}
+		}
+	}
 	captured, err := s.repo.Captured(ctx, b.ID)
 	if err != nil {
 		return Checkout{}, err
@@ -295,7 +388,19 @@ func (s *Service) Create(ctx context.Context, p *httpx.Principal, bookingID uuid
 	// The payment row and the booking's move to payment_processing commit
 	// together; a deadline that passes meanwhile still expires the booking.
 	var pay Payment
+	raced := false
 	err = s.tx.InTxAs(ctx, database.Actor{UserID: p.UserID, Role: "customer", Reason: "checkout started"}, func(ctx context.Context) error {
+		if err := s.repo.Lock(ctx, "pay:"+b.ID.String()+":"+req.Purpose); err != nil {
+			return err
+		}
+		if once { // lost a race with a concurrent request: reuse its order
+			if open, ok, err := s.repo.OpenFor(ctx, b.ID, req.Purpose); err != nil {
+				return err
+			} else if ok {
+				pay, raced = open, true
+				return nil
+			}
+		}
 		var err error
 		pay, err = s.repo.Create(ctx, db.CreatePaymentParams{
 			BookingID: b.ID, PayerOrgID: b.CustomerOrgID, Purpose: db.PaymentPurpose(req.Purpose), AmountPaise: amount,
@@ -308,6 +413,9 @@ func (s *Service) Create(ctx context.Context, p *httpx.Principal, bookingID uuid
 	})
 	if err != nil {
 		return Checkout{}, err
+	}
+	if raced {
+		return s.checkout(pay), nil
 	}
 	out := Checkout{Payment: pay, Checkout: order.Checkout}
 	if sb, ok := s.gateway.(*Razorpay); ok && sb.Sandbox() {
@@ -349,6 +457,23 @@ func (s *Service) Verify(ctx context.Context, p *httpx.Principal, paymentID uuid
 	if pay.GatewayOrderID == nil || !s.gateway.VerifyPayment(*pay.GatewayOrderID, req.GatewayPaymentID, req.Signature) {
 		return Payment{}, apperror.New(400, "PAYMENT_SIGNATURE_INVALID", "The payment could not be verified")
 	}
+	// The signature only proves the browser callback is genuine. Live payments are confirmed with
+	// the gateway itself; money counts only when the gateway says captured and order and amount
+	// match. Otherwise the payment stays as it is and the verified webhook finishes it.
+	if !s.gateway.Sandbox() && !strings.HasPrefix(req.GatewayPaymentID, "pay_sbx_") {
+		gp, err := s.gateway.FetchPayment(ctx, req.GatewayPaymentID)
+		if err != nil {
+			s.log.WarnContext(ctx, "could not confirm a payment with the gateway", "payment_id", pay.ID, "error", err)
+			return pay, nil // the webhook will confirm it
+		}
+		if gp.OrderID != *pay.GatewayOrderID || gp.AmountPaise != pay.AmountPaise {
+			s.log.ErrorContext(ctx, "ALERT: gateway payment does not match our order", "payment_id", pay.ID, "gateway_payment_id", gp.ID)
+			return Payment{}, apperror.New(400, "PAYMENT_MISMATCH", "The payment does not match this order")
+		}
+		if gp.Status != "captured" {
+			return pay, nil
+		}
+	}
 	return s.capture(ctx, pay, req.GatewayPaymentID, "")
 }
 
@@ -357,13 +482,37 @@ func (s *Service) Verify(ctx context.Context, p *httpx.Principal, paymentID uuid
 func (s *Service) capture(ctx context.Context, pay Payment, gatewayPaymentID, method string) (Payment, error) {
 	var out Payment
 	err := s.tx.InTxAs(ctx, database.Actor{Role: "system", Reason: "payment captured"}, func(ctx context.Context) error {
+		if err := s.repo.Lock(ctx, "pay:"+pay.BookingID.String()+":"+pay.Purpose); err != nil {
+			return err
+		}
 		captured, changed, err := s.repo.Capture(ctx, pay.ID, gatewayPaymentID, method)
 		if err != nil {
 			return err
 		}
 		out = captured
 		if !changed {
+			switch captured.Status {
+			case "captured", "partially_refunded", "refunded":
+				if captured.GatewayPaymentID != nil && *captured.GatewayPaymentID != gatewayPaymentID {
+					s.log.ErrorContext(ctx, "ALERT: second gateway payment captured for an already paid order; refund it in the gateway",
+						"payment_id", pay.ID, "gateway_payment_id", gatewayPaymentID)
+				}
+			default:
+				s.log.ErrorContext(ctx, "ALERT: captured payment updated no payment record",
+					"payment_id", pay.ID, "status", captured.Status, "gateway_payment_id", gatewayPaymentID)
+				return errors.New("captured payment could not be applied to payment " + pay.ID.String() + " in status " + captured.Status)
+			}
 			return nil
+		}
+		if pay.Purpose == "advance" || pay.Purpose == "deposit" {
+			if n, err := s.repo.OtherCaptured(ctx, pay.BookingID, pay.Purpose, pay.ID); err != nil {
+				return err
+			} else if n > 0 {
+				return s.refundDuplicate(ctx, captured)
+			}
+		}
+		if err := s.recordCapture(ctx, captured); err != nil {
+			return err
 		}
 		pl := events.Payload{}
 		if b, err := s.bookings.Load(ctx, pay.BookingID); err == nil {
@@ -381,6 +530,24 @@ func (s *Service) capture(ctx context.Context, pay Payment, gatewayPaymentID, me
 		return nil
 	})
 	return out, err
+}
+
+// refundDuplicate queues a full refund of a captured payment that duplicates an
+// earlier captured one for the same booking and purpose (the worker sends it).
+func (s *Service) refundDuplicate(ctx context.Context, pay Payment) error {
+	s.log.ErrorContext(ctx, "ALERT: duplicate captured payment; refunding", "payment_id", pay.ID,
+		"booking_id", pay.BookingID, "purpose", pay.Purpose, "amount_paise", pay.AmountPaise)
+	if s.refunds == nil {
+		return errors.New("duplicate payment " + pay.ID.String() + " cannot be refunded: refunds are not configured")
+	}
+	_, err := s.refunds(ctx).CreateRefund(ctx, db.CreateRefundParams{
+		PaymentID: pay.ID, BookingID: pay.BookingID, AmountPaise: pay.AmountPaise,
+		Reason: "Duplicate " + pay.Purpose + " payment", IdempotencyKey: "duplicate:" + pay.ID.String(),
+	})
+	if err != nil && !errors.Is(database.MapError(err), apperror.ErrNotFound) {
+		return database.MapError(err)
+	}
+	return nil
 }
 
 // razorpayEvent is the subset of a Razorpay webhook we use.
@@ -426,7 +593,7 @@ func (s *Service) Webhook(ctx context.Context, provider string, body []byte, sig
 		sum := sha256.Sum256(body)
 		eventID = "sha256:" + hex.EncodeToString(sum[:])
 	}
-	id, isNew, err := s.repo.RecordWebhook(ctx, db.InsertWebhookEventParams{
+	id, isNew, err := s.repo.RecordWebhook(ctx, db.ClaimWebhookEventParams{
 		Provider: provider, EventID: eventID, EventType: ev.Event, Payload: body, SignatureValid: true,
 	})
 	if err != nil {
@@ -435,20 +602,57 @@ func (s *Service) Webhook(ctx context.Context, provider string, body []byte, sig
 	if !isNew {
 		return WebhookAck{Status: "duplicate"}, nil
 	}
+	return s.finish(ctx, id, ev)
+}
 
+// finish applies a claimed event and records the outcome. The event is marked
+// processed only after the database changes committed; any failure marks it
+// failed (kept for retry) and is reported so the gateway redelivers.
+func (s *Service) finish(ctx context.Context, id uuid.UUID, ev razorpayEvent) (WebhookAck, error) {
 	status, procErr := s.apply(ctx, ev)
-	var msg *string
 	if procErr != nil {
 		m := procErr.Error()
-		msg = &m
+		s.log.ErrorContext(ctx, "payment webhook failed; will be retried", "webhook_id", id, "event", ev.Event, "error", procErr)
+		if err := s.repo.MarkWebhook(ctx, id, &m); err != nil {
+			return WebhookAck{}, err
+		}
+		return WebhookAck{}, apperror.ErrServiceUnavailable.WithDetail("webhook processing failed; retry later").Wrap(procErr)
 	}
-	if err := s.repo.MarkWebhook(ctx, id, msg); err != nil {
+	if err := s.repo.MarkWebhook(ctx, id, nil); err != nil {
 		return WebhookAck{}, err
 	}
-	if procErr != nil {
-		return WebhookAck{}, procErr
-	}
 	return WebhookAck{Status: status}, nil
+}
+
+// MaxWebhookAttempts bounds automatic retries of a failed webhook event.
+const MaxWebhookAttempts = 10
+
+// ReconcileWebhooks retries failed (or abandoned) webhook events from their
+// stored payload. Each event commits or fails on its own transaction.
+func (s *Service) ReconcileWebhooks(ctx context.Context) error {
+	rows, err := s.repo.RetryableWebhooks(ctx, MaxWebhookAttempts, 20)
+	if err != nil {
+		return err
+	}
+	for _, r := range rows {
+		ectx := database.WithoutTx(ctx)
+		body, ok, err := s.repo.ClaimWebhook(ectx, r.ID)
+		if err != nil || !ok {
+			continue
+		}
+		var ev razorpayEvent
+		if err := json.Unmarshal(body, &ev); err != nil {
+			m := "stored payload is unreadable: " + err.Error()
+			if err := s.repo.MarkWebhook(ectx, r.ID, &m); err != nil {
+				s.log.ErrorContext(ctx, "could not mark unreadable webhook", "webhook_id", r.ID, "error", err)
+			}
+			continue
+		}
+		if _, err := s.finish(ectx, r.ID, ev); err != nil && r.Attempts+1 >= MaxWebhookAttempts {
+			s.log.ErrorContext(ctx, "ALERT: payment webhook exhausted its retries; needs manual reconciliation", "webhook_id", r.ID)
+		}
+	}
+	return nil
 }
 
 func (s *Service) apply(ctx context.Context, ev razorpayEvent) (string, error) {
@@ -457,7 +661,9 @@ func (s *Service) apply(ctx context.Context, ev razorpayEvent) (string, error) {
 	case "payment.captured", "order.paid":
 		pay, err := s.repo.ByOrderID(ctx, ent.OrderID)
 		if errors.Is(err, apperror.ErrNotFound) {
-			return "ignored", nil // not ours (e.g. another environment on the same account)
+			s.log.ErrorContext(ctx, "ALERT: captured payment matched no payment record (another environment, or an order we lost)",
+				"gateway_order_id", ent.OrderID, "gateway_payment_id", ent.ID, "amount_paise", ent.Amount)
+			return "ignored", nil
 		}
 		if err != nil {
 			return "", err
@@ -541,6 +747,19 @@ func (s *Service) refundDone(ctx context.Context, q refundQueries, id, bookingID
 	if _, err := q.MarkRefundProcessed(ctx, db.MarkRefundProcessedParams{ID: id, GatewayRefundID: gatewayID}); err != nil {
 		return database.MapError(err)
 	}
+	// Confirmed by the gateway: record it in the ledger (once) and tell the customer.
+	info, err := q.GetRefundLedgerInfo(ctx, id)
+	if err != nil {
+		return database.MapError(err)
+	}
+	account := ledger.CustomerFunds
+	if info.IsDeposit {
+		account = ledger.CustomerDeposits
+	}
+	if _, err := ledger.Post(ctx, q, ledger.Posting{Kind: ledger.KindRefund, BookingID: bookingID, ReferenceType: "refund", ReferenceID: id,
+		Memo: "Refund confirmed by the gateway", Legs: []ledger.Leg{ledger.Dr(account, info.AmountPaise), ledger.Cr(ledger.GatewayClearing, info.AmountPaise)}}); err != nil {
+		return err
+	}
 	b, err := s.bookings.Load(ctx, bookingID)
 	if err != nil {
 		return err
@@ -572,54 +791,42 @@ func (s *Service) bookingsRefund(ctx context.Context, bookingID, refundID uuid.U
 	return 0, apperror.ErrNotFound
 }
 
-// MaxRefundAttempts is how often the worker retries a refund the gateway
-// refused before it is marked failed for finance to handle.
+// MaxRefundAttempts is how often a refund the gateway rejected is retried
+// before it is marked failed for finance. An uncertain outcome is never marked
+// failed: it is looked up at the gateway again and again.
 const MaxRefundAttempts = 10
 
-// ProcessRefunds sends queued refunds to the gateway and closes bookings
-// whose refunds are all settled (refund_pending → refunded). It runs inside
-// the worker job's transaction.
+func refundBackoff(attempts int32) float64 {
+	d := 60.0
+	for i := int32(1); i < attempts && d < 6*3600; i++ {
+		d *= 2
+	}
+	return min(d, 6*3600)
+}
+
+// ProcessRefunds sends queued refunds to the gateway and closes bookings whose
+// refunds are all settled (refund_pending → refunded). Every database step is its
+// own short transaction: a refund is claimed (marked submitting) and committed
+// BEFORE the gateway is called, and the answer is recorded afterwards, so no
+// transaction stays open across a network call and a crash is recoverable.
 func (s *Service) ProcessRefunds(ctx context.Context) error {
 	if s.refunds == nil {
 		return nil
 	}
-	q := s.refunds(ctx)
-	rows, err := q.ClaimPendingRefunds(ctx, 50)
+	dctx := database.WithoutTx(ctx)
+	rows, err := s.refunds(dctx).ClaimRefundsForSubmit(dctx, db.ClaimRefundsForSubmitParams{MaxAttempts: MaxRefundAttempts, BatchSize: 20})
 	if err != nil {
 		return err
 	}
 	for _, r := range rows {
-		if r.GatewayPaymentID == nil {
-			msg := "the payment has no gateway reference"
-			if _, err := q.MarkRefundFailed(ctx, db.MarkRefundFailedParams{ID: r.ID, FailureReason: &msg}); err != nil {
-				return err
-			}
-			continue
-		}
-		res, err := s.gateway.Refund(ctx, *r.GatewayPaymentID, r.AmountPaise, r.IdempotencyKey)
-		if err != nil {
-			s.log.WarnContext(ctx, "refund attempt failed", "refund_id", r.ID, "error", err)
-			msg := err.Error()
-			if r.Attempts+1 >= MaxRefundAttempts {
-				_, err = q.MarkRefundFailed(ctx, db.MarkRefundFailedParams{ID: r.ID, FailureReason: &msg})
-			} else {
-				err = q.MarkRefundAttemptFailed(ctx, db.MarkRefundAttemptFailedParams{ID: r.ID, FailureReason: &msg})
-			}
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		if !res.Processed {
-			if err := q.MarkRefundSubmitted(ctx, db.MarkRefundSubmittedParams{ID: r.ID, GatewayRefundID: &res.ID}); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := s.refundDone(ctx, q, r.ID, r.BookingID, &res.ID); err != nil {
-			return err
+		if err := s.submitRefund(dctx, r); err != nil {
+			s.log.ErrorContext(ctx, "refund submission could not be recorded", "refund_id", r.ID, "error", err)
 		}
 	}
+	if err := s.reconcileSubmittedRefunds(dctx); err != nil {
+		return err
+	}
+	q := s.refunds(ctx)
 	done, err := q.FinishRefundedBookings(ctx, 100)
 	if err != nil {
 		return err
@@ -629,6 +836,102 @@ func (s *Service) ProcessRefunds(ctx context.Context) error {
 			Reference: b.Reference, CustomerOrgID: b.CustomerOrgID, OwnerOrgID: b.OwnerOrgID,
 		}); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// submitRefund performs one claimed refund. The idempotency reference is the
+// refund's stable key, so a repeat can never refund twice.
+func (s *Service) submitRefund(ctx context.Context, r db.ClaimRefundsForSubmitRow) error {
+	q := s.refunds(ctx)
+	retry := func(msg string, uncertain bool) error {
+		if !uncertain && int(r.Attempts) >= MaxRefundAttempts {
+			s.log.ErrorContext(ctx, "ALERT: refund rejected by the gateway too many times; finance must handle it", "refund_id", r.ID, "reason", msg)
+			_, err := q.MarkRefundFailed(ctx, db.MarkRefundFailedParams{ID: r.ID, FailureReason: &msg})
+			return err
+		}
+		if uncertain && int(r.Attempts) >= MaxRefundAttempts {
+			s.log.ErrorContext(ctx, "ALERT: refund outcome still unknown after many attempts", "refund_id", r.ID, "reason", msg)
+		}
+		return q.MarkRefundRetry(ctx, db.MarkRefundRetryParams{ID: r.ID, Uncertain: uncertain, FailureReason: &msg, DelaySeconds: refundBackoff(r.Attempts)})
+	}
+	if r.GatewayPaymentID == nil {
+		msg := "the payment has no gateway reference"
+		_, err := q.MarkRefundFailed(ctx, db.MarkRefundFailedParams{ID: r.ID, FailureReason: &msg})
+		return err
+	}
+	var res RefundResult
+	found := false
+	if r.Attempts > 1 { // an earlier attempt may have reached the gateway
+		var err error
+		if res, found, err = s.gateway.FindRefund(ctx, *r.GatewayPaymentID, r.IdempotencyKey); err != nil {
+			return retry("could not check the gateway for an earlier attempt: "+err.Error(), true)
+		}
+	}
+	if !found {
+		var err error
+		if res, err = s.gateway.Refund(ctx, *r.GatewayPaymentID, r.AmountPaise, r.IdempotencyKey); err != nil {
+			var re *RefundError
+			definite := errors.As(err, &re) && re.Definite
+			s.log.WarnContext(ctx, "refund attempt failed", "refund_id", r.ID, "definite", definite, "error", err)
+			return retry(err.Error(), !definite)
+		}
+	}
+	return s.settleRefund(ctx, r.ID, r.BookingID, res)
+}
+
+// settleRefund records what the gateway said. A refund is processed only when the
+// gateway says so; accepted-but-pending stays pending until a webhook or the
+// reconciliation poll confirms it.
+func (s *Service) settleRefund(ctx context.Context, id, bookingID uuid.UUID, res RefundResult) error {
+	q := s.refunds(ctx)
+	if res.Failed {
+		msg := "the gateway reports the refund failed"
+		s.log.ErrorContext(ctx, "ALERT: gateway refund failed", "refund_id", id, "gateway_refund_id", res.ID)
+		if _, err := q.MarkRefundFailed(ctx, db.MarkRefundFailedParams{ID: id, FailureReason: &msg}); err != nil && !errors.Is(database.MapError(err), apperror.ErrNotFound) {
+			return err
+		}
+		return nil
+	}
+	if err := q.MarkRefundSubmitted(ctx, db.MarkRefundSubmittedParams{ID: id, GatewayRefundID: &res.ID}); err != nil {
+		return err
+	}
+	if !res.Processed {
+		return nil
+	}
+	err := s.tx.InTxAs(ctx, database.Actor{Role: "system", Reason: "refund processed"}, func(ctx context.Context) error {
+		return s.refundDone(ctx, s.refunds(ctx), id, bookingID, &res.ID)
+	})
+	if errors.Is(err, apperror.ErrNotFound) {
+		return nil // a webhook settled it first
+	}
+	return err
+}
+
+// reconcileSubmittedRefunds polls the gateway for refunds it accepted but never confirmed.
+func (s *Service) reconcileSubmittedRefunds(ctx context.Context) error {
+	q := s.refunds(ctx)
+	rows, err := q.SubmittedRefundsToCheck(ctx, 20)
+	if err != nil {
+		return err
+	}
+	for _, r := range rows {
+		if r.GatewayRefundID == nil {
+			continue
+		}
+		res, err := s.gateway.RefundStatus(ctx, *r.GatewayRefundID)
+		if err != nil {
+			s.log.WarnContext(ctx, "refund status check failed", "refund_id", r.ID, "error", err)
+			_ = q.TouchRefundCheck(ctx, r.ID)
+			continue
+		}
+		if !res.Processed && !res.Failed {
+			_ = q.TouchRefundCheck(ctx, r.ID)
+			continue
+		}
+		if err := s.settleRefund(ctx, r.ID, r.BookingID, RefundResult{ID: *r.GatewayRefundID, Processed: res.Processed, Failed: res.Failed}); err != nil {
+			s.log.ErrorContext(ctx, "refund reconciliation failed", "refund_id", r.ID, "error", err)
 		}
 	}
 	return nil
@@ -683,3 +986,9 @@ func (h *Handler) Routes(r *httpx.Router) {
 		return h.svc.Verify(c.Request.Context(), p, id, req)
 	}), httpx.Doc{Summary: "Verify the checkout callback signature", Request: VerifyRequest{}, Response: Payment{}})
 }
+
+// UseGateway swaps the payment gateway (tests inject a scripted one).
+func (s *Service) UseGateway(g Gateway) { s.gateway = g }
+
+// Gateway returns the configured gateway.
+func (s *Service) Gateway() Gateway { return s.gateway }

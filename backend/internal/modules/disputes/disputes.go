@@ -32,6 +32,8 @@ type Dispute struct {
 	Summary             string        `json:"summary"`
 	AmountClaimedPaise  int64         `json:"amount_claimed_paise"`
 	ResolvedAmountPaise *int64        `json:"resolved_amount_paise,omitempty"`
+	RefundedPaise       int64         `json:"refunded_paise" doc:"Approved amount returned to the customer"`
+	UnrecoveredPaise    int64         `json:"unrecovered_paise" doc:"Approved amount that could not be collected or refunded"`
 	Status              string        `json:"status"`
 	Resolution          *string       `json:"resolution,omitempty"`
 	AssignedAdminID     uuid.NullUUID `json:"assigned_admin_id"`
@@ -67,7 +69,7 @@ func toDispute(d db.Dispute) Dispute {
 	return Dispute{
 		ID: d.ID, BookingID: d.BookingID, RaisedByOrgID: d.RaisedByOrgID, AgainstOrgID: d.AgainstOrgID,
 		Category: string(d.Category), Summary: d.Summary, AmountClaimedPaise: d.AmountClaimedPaise,
-		ResolvedAmountPaise: d.ResolvedAmountPaise, Status: string(d.Status), Resolution: d.Resolution,
+		ResolvedAmountPaise: d.ResolvedAmountPaise, RefundedPaise: d.RefundedPaise, UnrecoveredPaise: d.UnrecoveredPaise, Status: string(d.Status), Resolution: d.Resolution,
 		AssignedAdminID: d.AssignedAdminID, ConversationID: d.ConversationID, OpenedAt: d.OpenedAt, ResolvedAt: d.ResolvedAt,
 	}
 }
@@ -81,6 +83,9 @@ type Repository interface {
 	Queue(ctx context.Context, status *string, k httpx.Keyset) ([]Dispute, error)
 	Assign(ctx context.Context, id, admin uuid.UUID) (Dispute, error)
 	Resolve(ctx context.Context, p db.ResolveDisputeParams) (Dispute, error)
+	CompletedAt(ctx context.Context, bookingID uuid.UUID) (*time.Time, error)
+	CountOpen(ctx context.Context, bookingID uuid.UUID) (int, error)
+	Settle(ctx context.Context, d Dispute, b bookings.Booking, amount int64) error
 	Emit(ctx context.Context, id uuid.UUID, eventType string, p events.Payload) error
 }
 
@@ -136,6 +141,66 @@ func (r *PGRepository) Resolve(ctx context.Context, p db.ResolveDisputeParams) (
 	return toDispute(d), database.MapError(err)
 }
 
+func (r *PGRepository) CompletedAt(ctx context.Context, bookingID uuid.UUID) (*time.Time, error) {
+	at, err := r.q(ctx).BookingCompletedAt(ctx, bookingID)
+	return at, database.MapError(err)
+}
+
+func (r *PGRepository) CountOpen(ctx context.Context, bookingID uuid.UUID) (int, error) {
+	n, err := r.q(ctx).CountOpenDisputes(ctx, bookingID)
+	return int(n), database.MapError(err)
+}
+
+// Settle turns an approved amount into money. A dispute the customer won becomes real
+// refunds (picked up by the refund worker) from rental payments, never from the security
+// deposit that is still held. A charge the owner won is taken from the held deposit when it
+// is released; what the deposit cannot cover is recorded as unrecovered.
+func (r *PGRepository) Settle(ctx context.Context, d Dispute, b bookings.Booking, amount int64) error {
+	q := r.q(ctx)
+	held, err := q.HeldDepositOfBooking(ctx, b.ID)
+	if err != nil {
+		return database.MapError(err)
+	}
+	var refunded, unrecovered int64
+	if d.RaisedByOrgID == b.CustomerOrgID {
+		rows, err := q.RefundablePayments(ctx, b.ID)
+		if err != nil {
+			return database.MapError(err)
+		}
+		remaining := amount
+		for _, p := range rows {
+			if remaining <= 0 {
+				break
+			}
+			avail := p.RefundablePaise
+			if p.Purpose == "deposit" {
+				continue
+			}
+			if held.PaymentID == p.ID.String() {
+				avail -= held.HeldPaise // the deposit stays refundable for its own release
+			}
+			take := min(avail, remaining)
+			if take <= 0 {
+				continue
+			}
+			if _, err := q.CreateRefund(ctx, db.CreateRefundParams{PaymentID: p.ID, BookingID: b.ID, AmountPaise: take,
+				Reason: "Dispute resolved in the customer's favour", IdempotencyKey: "dispute:" + d.ID.String() + ":" + p.ID.String()}); err != nil {
+				return database.MapError(err)
+			}
+			refunded += take
+			remaining -= take
+		}
+		unrecovered = remaining
+	} else {
+		claimed, err := q.ChargedAgainstDeposit(ctx, db.ChargedAgainstDepositParams{BookingID: b.ID, ExcludeID: d.ID, OwnerOrgID: d.RaisedByOrgID})
+		if err != nil {
+			return database.MapError(err)
+		}
+		unrecovered = max(amount-max(held.HeldPaise-claimed, 0), 0)
+	}
+	return database.MapError(q.SettleDispute(ctx, db.SettleDisputeParams{ID: d.ID, RefundedPaise: refunded, UnrecoveredPaise: unrecovered}))
+}
+
 func (r *PGRepository) Emit(ctx context.Context, id uuid.UUID, eventType string, p events.Payload) error {
 	return database.MapError(events.Emit(ctx, r.q(ctx), "dispute", id, eventType, p))
 }
@@ -149,6 +214,9 @@ func mapAll(rows []db.Dispute) []Dispute {
 }
 
 // ---- service -----------------------------------------------------------------------
+
+// DisputeWindow is how long after completion a dispute can still be raised.
+const DisputeWindow = 7 * 24 * time.Hour
 
 // Disputes can be raised from dispatch until 7 days after completion.
 var disputableStatuses = map[string]bool{
@@ -184,6 +252,16 @@ func (s *Service) Open(ctx context.Context, p *httpx.Principal, bookingID uuid.U
 	}
 	if !disputableStatuses[b.Status] {
 		return Dispute{}, apperror.ErrInvalidTransition.WithDetail("disputes can be raised once the machine is dispatched")
+	}
+	// Seven days after completion the window closes (a disputed booking keeps its original completion time).
+	if b.Status == bookings.StatusCompleted || b.Status == bookings.StatusDisputed {
+		at, err := s.repo.CompletedAt(ctx, b.ID)
+		if err != nil {
+			return Dispute{}, err
+		}
+		if at != nil && time.Now().After(at.Add(DisputeWindow)) {
+			return Dispute{}, apperror.ErrBusinessRule.WithDetail("disputes can be raised within 7 days of completion")
+		}
 	}
 	var out Dispute
 	err = s.tx.InTxAs(ctx, database.Actor{UserID: p.UserID, Role: side.Role(), Reason: "dispute: " + req.Category}, func(ctx context.Context) error {
@@ -261,13 +339,26 @@ func (s *Service) Assign(ctx context.Context, p *httpx.Principal, id uuid.UUID) 
 	return out, err
 }
 
-// Resolve closes a dispute; a disputed booking returns to completed.
+// Resolve closes a dispute. An approved amount becomes a real refund (customer won) or a
+// charge against the held deposit (owner won). The booking goes back to the state it was in
+// when the first dispute opened, and only once no other dispute on it is still open: the
+// return, inspection and payment requirements of that state still apply.
 func (s *Service) Resolve(ctx context.Context, p *httpx.Principal, id uuid.UUID, req ResolveRequest) (Dispute, error) {
 	current, err := s.repo.Get(ctx, id)
 	if err != nil {
 		return Dispute{}, err
 	}
 	resolution := strings.TrimSpace(req.Resolution)
+	approved := int64(0)
+	if req.ResolvedAmountPaise != nil {
+		approved = *req.ResolvedAmountPaise
+	}
+	if req.Outcome == "rejected" && approved != 0 {
+		return Dispute{}, apperror.ErrValidation.WithFields(apperror.FieldError{Field: "resolved_amount_paise", Code: "invalid", Message: "a rejected dispute approves no amount"})
+	}
+	if current.AmountClaimedPaise > 0 && approved > current.AmountClaimedPaise {
+		return Dispute{}, apperror.ErrValidation.WithFields(apperror.FieldError{Field: "resolved_amount_paise", Code: "too_large", Message: "cannot exceed the amount claimed"})
+	}
 	var out Dispute
 	err = s.tx.InTxAs(ctx, database.Actor{UserID: p.UserID, Role: "admin", Reason: resolution}, func(ctx context.Context) error {
 		d, err := s.repo.Resolve(ctx, db.ResolveDisputeParams{
@@ -281,9 +372,24 @@ func (s *Service) Resolve(ctx context.Context, p *httpx.Principal, id uuid.UUID,
 			return err
 		}
 		out = d
-		b, _, err := s.bookings.Access(ctx, p, current.BookingID)
-		if err == nil && b.Status == bookings.StatusDisputed {
-			if _, err := s.bookings.Act(ctx, p, b.ID, bookings.ActionResolveDispute, bookings.ActionRequest{Reason: resolution}); err != nil {
+		b, err := s.bookings.Load(ctx, current.BookingID)
+		if err != nil {
+			return err
+		}
+		if req.Outcome == "resolved" && approved > 0 {
+			if err := s.repo.Settle(ctx, d, b, approved); err != nil {
+				return err
+			}
+			if out, err = s.repo.Get(ctx, id); err != nil {
+				return err
+			}
+		}
+		open, err := s.repo.CountOpen(ctx, b.ID)
+		if err != nil {
+			return err
+		}
+		if open == 0 {
+			if err := s.bookings.ResumeAfterDispute(ctx, b.ID); err != nil {
 				return err
 			}
 		}

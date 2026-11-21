@@ -109,7 +109,6 @@ var Rules = map[Action]Rule{
 	ActionComplete:       {From: []string{StatusReturned}, To: StatusCompleted, Sides: SideOwner | SideAdmin, Event: "booking.completed"},
 	ActionClose:          {From: []string{StatusCompleted}, To: StatusClosed, Sides: SideAdmin, Event: ""},
 	ActionConfirmPayment: {From: []string{StatusAccepted, StatusPaymentPending, StatusPaymentProcessing}, To: StatusConfirmed, Sides: SideAdmin, Event: "booking.confirmed"},
-	ActionResolveDispute: {From: []string{StatusDisputed}, To: StatusCompleted, Sides: SideAdmin, Event: ""},
 }
 
 // GeoPoint is a WGS84 coordinate.

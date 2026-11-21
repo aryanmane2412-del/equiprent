@@ -126,6 +126,45 @@ func (s *Service) AddMember(ctx context.Context, p *httpx.Principal, orgID uuid.
 	return s.repo.AddMember(ctx, orgID, p.UserID, req)
 }
 
+// MyInvitations lists the caller's open invitations.
+func (s *Service) MyInvitations(ctx context.Context, p *httpx.Principal) (InvitationList, error) {
+	list, err := s.repo.MyInvitations(ctx, p.UserID)
+	return InvitationList{Data: list}, err
+}
+
+// RespondInvitation lets the invitee accept or decline (only their own invitation).
+func (s *Service) RespondInvitation(ctx context.Context, p *httpx.Principal, id uuid.UUID, accept bool) error {
+	return s.repo.RespondInvitation(ctx, p.UserID, id, accept)
+}
+
+func (s *Service) canInvite(p *httpx.Principal, orgID uuid.UUID) bool {
+	return p.HasOrgRole(orgID, httpx.RoleOrgAdmin, httpx.RoleFleetManager) || p.HasPlatformRole(httpx.RoleAdminSupport)
+}
+
+// OrgInvitations lists the organisation's pending invitations.
+func (s *Service) OrgInvitations(ctx context.Context, p *httpx.Principal, orgID uuid.UUID) (OrgInvitationList, error) {
+	if !s.canInvite(p, orgID) {
+		return OrgInvitationList{}, apperror.ErrNotFound
+	}
+	list, err := s.repo.OrgInvitations(ctx, orgID)
+	return OrgInvitationList{Data: list}, err
+}
+
+// RevokeInvitation withdraws a pending invitation of the organisation.
+func (s *Service) RevokeInvitation(ctx context.Context, p *httpx.Principal, orgID, id uuid.UUID) error {
+	if !s.canInvite(p, orgID) {
+		return apperror.ErrNotFound
+	}
+	ok, err := s.repo.RevokeInvitation(ctx, orgID, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return apperror.ErrNotFound
+	}
+	return nil
+}
+
 // RemoveMember revokes one role. Admins cannot remove their own admin role,
 // which would leave the organisation without one.
 func (s *Service) RemoveMember(ctx context.Context, p *httpx.Principal, orgID, userID uuid.UUID, role string) error {

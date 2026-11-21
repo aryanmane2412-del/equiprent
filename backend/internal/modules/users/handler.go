@@ -26,6 +26,11 @@ func (h *Handler) Routes(r *httpx.Router) {
 	a.GET("/orgs/:org_id/members", h.members, httpx.Doc{Summary: "List members", Response: MemberList{}})
 	a.POST("/orgs/:org_id/members", h.addMember, httpx.Doc{Summary: "Add a member by phone", Request: AddMemberRequest{}, Response: Member{}, Status: 201})
 	a.DELETE("/orgs/:org_id/members/:user_id", h.removeMember, httpx.Doc{Summary: "Revoke a member's role", Query: RemoveMemberQuery{}})
+	a.GET("/me/invitations", h.myInvitations, httpx.Doc{Summary: "Invitations to join an organisation", Response: InvitationList{}})
+	a.POST("/invitations/:id/accept", h.respondInvitation(true), httpx.Doc{Summary: "Accept an invitation (the role is granted only now)"})
+	a.POST("/invitations/:id/decline", h.respondInvitation(false), httpx.Doc{Summary: "Decline an invitation"})
+	a.GET("/orgs/:org_id/invitations", h.orgInvitations, httpx.Doc{Summary: "Pending invitations of the organisation", Response: OrgInvitationList{}})
+	a.DELETE("/orgs/:org_id/invitations/:id", h.revokeInvitation, httpx.Doc{Summary: "Withdraw a pending invitation"})
 	a.GET("/orgs/:org_id/addresses", h.addresses, httpx.Doc{Summary: "Saved sites and yards", Response: AddressList{}})
 	a.POST("/orgs/:org_id/addresses", h.createAddress, httpx.Doc{Summary: "Save a site or yard", Request: CreateAddressRequest{}, Response: Address{}, Status: 201})
 	a.DELETE("/orgs/:org_id/addresses/:id", h.deleteAddress, httpx.Doc{Summary: "Delete a saved address"})
@@ -100,6 +105,48 @@ func (h *Handler) addMember(c *gin.Context) {
 	var req AddMemberRequest
 	if ok && httpx.BindJSON(c, &req) {
 		httpx.Send(c, http.StatusCreated)(h.svc.AddMember(c.Request.Context(), p, orgID, req))
+	}
+}
+
+func (h *Handler) myInvitations(c *gin.Context) {
+	if p, ok := httpx.MustPrincipal(c); ok {
+		httpx.Send(c, http.StatusOK)(h.svc.MyInvitations(c.Request.Context(), p))
+	}
+}
+
+func (h *Handler) respondInvitation(accept bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		p, ok := httpx.MustPrincipal(c)
+		if !ok {
+			return
+		}
+		if id, ok := httpx.UUIDParam(c, "id"); ok {
+			httpx.Done(c, h.svc.RespondInvitation(c.Request.Context(), p, id, accept))
+		}
+	}
+}
+
+func (h *Handler) orgInvitations(c *gin.Context) {
+	p, ok := httpx.MustPrincipal(c)
+	if !ok {
+		return
+	}
+	if orgID, ok := httpx.UUIDParam(c, "org_id"); ok {
+		httpx.Send(c, http.StatusOK)(h.svc.OrgInvitations(c.Request.Context(), p, orgID))
+	}
+}
+
+func (h *Handler) revokeInvitation(c *gin.Context) {
+	p, ok := httpx.MustPrincipal(c)
+	if !ok {
+		return
+	}
+	orgID, ok := httpx.UUIDParam(c, "org_id")
+	if !ok {
+		return
+	}
+	if id, ok := httpx.UUIDParam(c, "id"); ok {
+		httpx.Done(c, h.svc.RevokeInvitation(c.Request.Context(), p, orgID, id))
 	}
 }
 

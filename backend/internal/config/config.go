@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
@@ -216,6 +217,12 @@ type BookingConfig struct {
 	DefaultDepositPaise int64
 	PaymentWindow       time.Duration // online bookings must pay the advance within this after acceptance
 	ProcessingTimeout   time.Duration // an unfinished checkout returns to payment_pending after this
+	SettlementHold      time.Duration // completion -> owner settlement eligible (T+3 by default)
+	// Policy values the business has not decided yet. Zero means the rule is OFF; nothing is invented.
+	NoShowGrace         time.Duration // wait after the start time before a no-show may be declared
+	OverdueFeeBpsPerDay int           // late-return fee, basis points of the daily rate per day
+	TurnaroundBuffer    time.Duration // gap kept between consecutive bookings of one machine
+	CancelPenaltyBps    int           // cancellation penalty, basis points of the booking total
 }
 
 // DocsConfig controls the OpenAPI document and Swagger UI.
@@ -299,7 +306,18 @@ func FromEnv() (Config, error) { return Load(os.LookupEnv) }
 func Load(lookup func(string) (string, bool)) (Config, error) {
 	l := &loader{lookup: lookup}
 
-	env := Environment(strings.ToLower(l.str("APP_ENV", string(EnvDevelopment))))
+	env := Environment(strings.ToLower(l.str("APP_ENV", "")))
+	if env == "" {
+		// A missing APP_ENV is only treated as development on a machine that clearly is one
+		// (no database configured, or one on the loopback interface); anywhere else it is an
+		// error, so a forgotten variable can never start production in development mode.
+		if looksLocal(lookup) {
+			env = EnvDevelopment
+		} else {
+			l.fail("APP_ENV", errors.New("is required (development, test, staging or production)"))
+			env = EnvProduction // validate everything else as the strictest environment
+		}
+	}
 	switch env {
 	case EnvDevelopment, EnvTest, EnvStaging, EnvProduction:
 	default:
@@ -400,6 +418,11 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 			DefaultDepositPaise: int64(l.int("BOOKING_DEFAULT_DEPOSIT_PAISE", 0)),
 			PaymentWindow:       l.duration("BOOKING_PAYMENT_WINDOW", 24*time.Hour),
 			ProcessingTimeout:   l.duration("BOOKING_PAYMENT_PROCESSING_TIMEOUT", 30*time.Minute),
+			SettlementHold:      l.duration("BOOKING_SETTLEMENT_HOLD", 72*time.Hour),
+			NoShowGrace:         l.duration("BOOKING_NO_SHOW_GRACE", 0),
+			OverdueFeeBpsPerDay: l.int("BOOKING_OVERDUE_FEE_BPS_PER_DAY", 0),
+			TurnaroundBuffer:    l.duration("BOOKING_TURNAROUND_BUFFER", 0),
+			CancelPenaltyBps:    l.int("BOOKING_CANCEL_PENALTY_BPS", 0),
 		},
 		Docs: DocsConfig{
 			Enabled:   l.bool("API_DOCS_ENABLED", !env.IsProduction()),
@@ -457,6 +480,9 @@ func (c Config) validate(l *loader) {
 		if u, err := url.Parse(c.Database.URL); err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
 			l.fail("DATABASE_URL", fmt.Errorf("must be a postgres:// URL"))
 		}
+	}
+	if (c.Env == EnvStaging || c.Env.IsProduction()) && c.Redis.URL == "" {
+		l.fail("REDIS_URL", errors.New("is required in staging and production (shared rate limits, OTP cooldowns and login lockouts)"))
 	}
 	if c.Redis.URL != "" {
 		if u, err := url.Parse(c.Redis.URL); err != nil || (u.Scheme != "redis" && u.Scheme != "rediss") {
@@ -585,6 +611,10 @@ func (c Config) validate(l *loader) {
 	if c.Booking.AdvanceBps < 0 || c.Booking.AdvanceBps > 10000 {
 		l.fail("BOOKING_ADVANCE_BPS", errors.New("must be between 0 and 10000"))
 	}
+	if c.Booking.CancelPenaltyBps < 0 || c.Booking.CancelPenaltyBps > 10000 || c.Booking.OverdueFeeBpsPerDay < 0 || c.Booking.OverdueFeeBpsPerDay > 10000 ||
+		c.Booking.NoShowGrace < 0 || c.Booking.TurnaroundBuffer < 0 {
+		l.fail("BOOKING_CANCEL_PENALTY_BPS", errors.New("penalty, fee, grace and buffer values must be >= 0 (bps <= 10000)"))
+	}
 	if c.Booking.GSTRateBps < 0 || c.Booking.GSTRateBps > 2800 {
 		l.fail("GST_RATE_BPS", errors.New("must be between 0 and 2800"))
 	}
@@ -619,7 +649,54 @@ func (l *loader) fail(key string, err error) { l.errs = append(l.errs, fmt.Error
 func (l *loader) raw(key string) (string, bool) {
 	v, ok := l.lookup(key)
 	v = strings.TrimSpace(v)
-	return v, ok && v != ""
+	if ok && v != "" {
+		return v, true
+	}
+	// KEY_FILE points at a file holding the value (Docker/Kubernetes secrets), so secrets need
+	// not sit in the process environment.
+	if path, ok := l.lookup(key + "_FILE"); ok && strings.TrimSpace(path) != "" {
+		b, err := readSecretFile(strings.TrimSpace(path))
+		if err != nil {
+			l.fail(key+"_FILE", err)
+			return "", false
+		}
+		if s := strings.TrimSpace(string(b)); s != "" {
+			return s, true
+		}
+	}
+	return "", false
+}
+
+// readSecretFile reads a small secret file; the error never contains the content.
+func readSecretFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, errors.New("cannot be read")
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 64<<10))
+	if err != nil {
+		return nil, errors.New("cannot be read")
+	}
+	return b, nil
+}
+
+// looksLocal reports whether the process is plainly a developer machine: no DATABASE_URL, or
+// one whose host is loopback.
+func looksLocal(lookup func(string) (string, bool)) bool {
+	raw, ok := lookup("DATABASE_URL")
+	if !ok || strings.TrimSpace(raw) == "" {
+		return true
+	}
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 func (l *loader) str(key, def string) string {

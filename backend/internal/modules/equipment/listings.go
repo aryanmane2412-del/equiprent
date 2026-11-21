@@ -40,6 +40,20 @@ type MediaOptions struct {
 }
 
 // WithMedia enables photo/document handling.
+// WithAudit lets administrative catalogue changes run in an actor-attributed transaction.
+func (s *Service) WithAudit(tx database.Transactor) *Service {
+	s.tx = tx
+	return s
+}
+
+// audited runs fn in one transaction attributed to the admin (audit_logs records who and why).
+func (s *Service) audited(ctx context.Context, p *httpx.Principal, reason string, fn func(ctx context.Context) error) error {
+	if s.tx == nil || p == nil {
+		return fn(ctx)
+	}
+	return s.tx.InTxAs(ctx, database.Actor{UserID: p.UserID, Role: "admin", Reason: reason}, fn)
+}
+
 func (s *Service) WithMedia(m Media, opt MediaOptions) *Service {
 	if opt.PhotoTTL <= 0 {
 		opt.PhotoTTL = time.Hour
@@ -783,6 +797,7 @@ func (h *Handler) listingRoutes(r *httpx.Router) {
 	}), with(org, httpx.Doc{Summary: "Short-lived link to a machine document (audited)", Response: storage.SignedURL{}}))
 
 	ad := r.Tag("admin").Admin(ModeratorRoles...)
+	catWrite := ad.AdminWrites("POST /admin/categories", "PUT /admin/categories/:id") // catalogue editing: admin_ops only
 	ad.GET("/admin/listings/:id", httpx.Handle(200, func(c *gin.Context, p *httpx.Principal) (any, error) {
 		id, err := httpx.Param(c, "id")
 		if err != nil {
@@ -793,15 +808,25 @@ func (h *Handler) listingRoutes(r *httpx.Router) {
 	ad.GET("/admin/categories", httpx.Handle(200, func(c *gin.Context, _ *httpx.Principal) (any, error) {
 		return h.svc.AdminCategories(c.Request.Context())
 	}), httpx.Doc{Summary: "All categories, including hidden ones", Response: AdminCategoryList{}})
-	ad.POST("/admin/categories", httpx.HandleJSON(201, func(c *gin.Context, _ *httpx.Principal, req CategoryRequest) (any, error) {
-		return h.svc.CreateCategory(c.Request.Context(), req)
+	catWrite.POST("/admin/categories", httpx.HandleJSON(201, func(c *gin.Context, p *httpx.Principal, req CategoryRequest) (any, error) {
+		var out AdminCategory
+		err := h.svc.audited(c.Request.Context(), p, "category created: "+req.Slug, func(ctx context.Context) (err error) {
+			out, err = h.svc.CreateCategory(ctx, req)
+			return err
+		})
+		return out, err
 	}), httpx.Doc{Summary: "Add a category", Request: CategoryRequest{}, Response: AdminCategory{}, Status: 201})
-	ad.PUT("/admin/categories/:id", httpx.HandleJSON(200, func(c *gin.Context, _ *httpx.Principal, req CategoryRequest) (any, error) {
+	catWrite.PUT("/admin/categories/:id", httpx.HandleJSON(200, func(c *gin.Context, p *httpx.Principal, req CategoryRequest) (any, error) {
 		id, err := httpx.Param(c, "id")
 		if err != nil {
 			return nil, err
 		}
-		return h.svc.UpdateCategory(c.Request.Context(), id, req)
+		var out AdminCategory
+		err = h.svc.audited(c.Request.Context(), p, "category updated: "+id.String(), func(ctx context.Context) (err error) {
+			out, err = h.svc.UpdateCategory(ctx, id, req)
+			return err
+		})
+		return out, err
 	}), httpx.Doc{Summary: "Edit, reorder, hide or show a category", Request: CategoryRequest{}, Response: AdminCategory{},
 		Description: "Hidden categories disappear from browsing and cannot take new listings; existing listings keep their category."})
 }

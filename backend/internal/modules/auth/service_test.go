@@ -32,11 +32,13 @@ type fakeRepo struct {
 }
 
 type fakeToken struct {
-	user    uuid.UUID
-	purpose string
-	email   string
-	used    bool
-	expires time.Time
+	user     uuid.UUID
+	purpose  string
+	email    string
+	used     bool
+	expires  time.Time
+	attempts int
+	created  time.Time
 }
 
 type fakeSession struct {
@@ -160,7 +162,7 @@ func (f *fakeRepo) Roles(_ context.Context, id uuid.UUID) ([]httpx.Role, error) 
 }
 
 func (f *fakeRepo) CreateToken(_ context.Context, user uuid.UUID, purpose string, hash []byte, email string, exp time.Time) error {
-	f.tokens[string(hash)] = &fakeToken{user: user, purpose: purpose, email: email, expires: exp}
+	f.tokens[string(hash)] = &fakeToken{user: user, purpose: purpose, email: email, expires: exp, created: time.Now()}
 	return nil
 }
 func (f *fakeRepo) ConsumeToken(_ context.Context, hash []byte, purpose string) (uuid.UUID, string, error) {
@@ -170,6 +172,32 @@ func (f *fakeRepo) ConsumeToken(_ context.Context, hash []byte, purpose string) 
 	}
 	t.used = true
 	return t.user, t.email, nil
+}
+
+// VerifyToken mirrors the SQL: the newest live token of the address, five attempts, single use.
+func (f *fakeRepo) VerifyToken(_ context.Context, email string, hash []byte, purpose string) (uuid.UUID, bool, error) {
+	var newest *fakeToken
+	var newestHash string
+	for h, t := range f.tokens {
+		if t.email != email || t.purpose != purpose || t.used || time.Now().After(t.expires) || t.attempts >= 5 {
+			continue
+		}
+		if newest == nil || t.created.After(newest.created) {
+			newest, newestHash = t, h
+		}
+	}
+	if newest == nil {
+		return uuid.Nil, false, nil
+	}
+	if newestHash != string(hash) {
+		newest.attempts++
+		if newest.attempts >= 5 {
+			newest.used = true
+		}
+		return uuid.Nil, false, nil
+	}
+	newest.used = true
+	return newest.user, true, nil
 }
 func (f *fakeRepo) InvalidateTokens(_ context.Context, user uuid.UUID, purpose string) error {
 	for _, t := range f.tokens {
@@ -480,7 +508,7 @@ func TestPasswordLoginRequiresVerifiedIdentifier(t *testing.T) {
 			t.Fatalf("%s before verification: %v", id, err)
 		}
 	}
-	if _, err := svc.VerifyEmail(ctx, VerifyEmailRequest{Token: resp.DevEmailToken}, ClientInfo{}); err != nil {
+	if _, err := svc.VerifyEmail(ctx, VerifyEmailRequest{Email: "ravi@example.com", Token: resp.DevEmailToken}, ClientInfo{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.Login(ctx, LoginRequest{Identifier: "Ravi@Example.com", Password: pw}, ClientInfo{}); err != nil {
@@ -489,7 +517,7 @@ func TestPasswordLoginRequiresVerifiedIdentifier(t *testing.T) {
 	if _, err := svc.Login(ctx, LoginRequest{Identifier: "9876543210", Password: pw}, ClientInfo{}); code(err) != "VERIFICATION_REQUIRED" {
 		t.Fatal("the phone is still unverified")
 	}
-	if _, err := svc.VerifyEmail(ctx, VerifyEmailRequest{Token: resp.DevEmailToken}, ClientInfo{}); code(err) != "TOKEN_INVALID" {
+	if _, err := svc.VerifyEmail(ctx, VerifyEmailRequest{Email: "ravi@example.com", Token: resp.DevEmailToken}, ClientInfo{}); code(err) != "TOKEN_INVALID" {
 		t.Fatal("email tokens are single use")
 	}
 }
@@ -592,7 +620,7 @@ func TestLogoutAndRevokeOthers(t *testing.T) {
 func TestPasswordResetByEmailSignsOutEverywhere(t *testing.T) {
 	svc, repo := newTestService(t)
 	resp := register(t, svc, AccountTypeCustomer)
-	_, _ = svc.VerifyEmail(ctx, VerifyEmailRequest{Token: resp.DevEmailToken}, ClientInfo{})
+	_, _ = svc.VerifyEmail(ctx, VerifyEmailRequest{Email: "ravi@example.com", Token: resp.DevEmailToken}, ClientInfo{})
 	tok, _ := svc.VerifyOTP(ctx, VerifyOTPRequest{Phone: phone, Code: resp.DevOTP}, ClientInfo{})
 
 	forgot, err := svc.ForgotPassword(ctx, ForgotPasswordRequest{Identifier: "ravi@example.com"}, ClientInfo{})
@@ -723,5 +751,35 @@ func TestAppRoles(t *testing.T) {
 	got := httpx.AppRoles([]httpx.Role{{Code: "org_admin", OrgID: org}, {Code: "fleet_manager", OrgID: org}, {Code: "admin_kyc"}, {Code: "customer", OrgID: org}})
 	if !reflect.DeepEqual(got, []string{"CUSTOMER", "FLEET_MANAGER", "ADMIN"}) {
 		t.Fatalf("app roles = %v", got)
+	}
+}
+
+// Repeated code requests for one number are capped per hour even when each wait is skipped.
+func TestSMSResendLimitPerPhone(t *testing.T) {
+	svc, _ := newTestService(t)
+	var last error
+	sent := 0
+	for range 12 {
+		_ = svc.store.Delete(ctx, "otp:cooldown:"+purposeLogin+":"+phone) // skip the 30-second wait
+		if _, last = svc.RequestOTP(ctx, RequestOTPRequest{Phone: phone}); last == nil {
+			sent++
+		}
+	}
+	if sent != otpPerPhoneLimit || code(last) != "RATE_LIMITED" {
+		t.Fatalf("sent %d codes, last error %v", sent, last)
+	}
+	// Another number is unaffected.
+	if _, err := svc.RequestOTP(ctx, RequestOTPRequest{Phone: "+919811112222"}); err != nil {
+		t.Fatalf("another phone: %v", err)
+	}
+}
+
+func TestEmailTokenHashIsBoundToTheAddress(t *testing.T) {
+	a, b := emailTokenHash("a@example.com", "123456"), emailTokenHash("b@example.com", "123456")
+	if string(a) == string(b) {
+		t.Fatal("the same code for two addresses must not collide")
+	}
+	if string(a) != string(emailTokenHash("a@example.com", "123456")) {
+		t.Fatal("the hash must be stable")
 	}
 }

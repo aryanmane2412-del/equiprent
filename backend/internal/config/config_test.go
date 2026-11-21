@@ -3,6 +3,8 @@ package config
 import (
 	"log/slog"
 	"maps"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -208,5 +210,79 @@ func TestStorageDriverRules(t *testing.T) {
 	if _, err := Load(lookupFrom(map[string]string{"APP_ENV": "development", "DATABASE_URL": "postgres://u:p@localhost/db", "STORAGE_DRIVER": "s3", "STORAGE_S3_ENDPOINT": "http://localhost:9000",
 		"STORAGE_S3_BUCKET": "dev", "STORAGE_S3_ACCESS_KEY_ID": "minio", "STORAGE_S3_SECRET_ACCESS_KEY": "minio123"})); err != nil {
 		t.Fatalf("MinIO over http is fine in development: %v", err)
+	}
+}
+
+func TestMissingAppEnv(t *testing.T) {
+	// A developer machine (no database, or a loopback one) may omit APP_ENV: development.
+	for _, db := range []string{"postgres://u:p@localhost:5434/equiprent?sslmode=disable", "postgres://u:p@127.0.0.1/equiprent"} {
+		m := map[string]string{}
+		if db != "" {
+			m["DATABASE_URL"] = db
+		}
+		cfg, err := Load(lookupFrom(m))
+		if err != nil || cfg.Env != EnvDevelopment {
+			t.Fatalf("local %q: %v %v", db, cfg.Env, err)
+		}
+	}
+	// Anywhere else a missing APP_ENV is an error, never a silent development mode.
+	m := productionEnv(nil)
+	delete(m, "APP_ENV")
+	if _, err := Load(lookupFrom(m)); err == nil || !strings.Contains(err.Error(), "APP_ENV") {
+		t.Fatalf("missing APP_ENV with a remote database: %v", err)
+	}
+	if _, err := Load(lookupFrom(map[string]string{"APP_ENV": "prod"})); err == nil {
+		t.Fatal("an unknown APP_ENV was accepted")
+	}
+}
+
+func TestProductionAndStagingRequireRedis(t *testing.T) {
+	for _, env := range []string{"production", "staging"} {
+		m := productionEnv(map[string]string{"APP_ENV": env})
+		delete(m, "REDIS_URL")
+		if _, err := Load(lookupFrom(m)); err == nil || !strings.Contains(err.Error(), "REDIS_URL") {
+			t.Fatalf("%s without Redis: %v", env, err)
+		}
+	}
+	if _, err := Load(lookupFrom(productionEnv(nil))); err != nil {
+		t.Fatalf("valid production configuration: %v", err)
+	}
+	// Development keeps working without Redis.
+	if _, err := Load(lookupFrom(map[string]string{"APP_ENV": "development", "DATABASE_URL": "postgres://u:p@localhost:5434/e"})); err != nil {
+		t.Fatalf("development: %v", err)
+	}
+}
+
+func TestProductionNeverEchoesOTPs(t *testing.T) {
+	for _, k := range []string{"AUTH_DEV_SIMULATION", "OTP_DEV_ECHO"} {
+		if _, err := Load(lookupFrom(productionEnv(map[string]string{k: "true"}))); err == nil || !strings.Contains(err.Error(), "AUTH_DEV_SIMULATION") {
+			t.Fatalf("production with %s: %v", k, err)
+		}
+	}
+	cfg, err := Load(lookupFrom(productionEnv(nil)))
+	if err != nil || cfg.Auth.DevSimulation {
+		t.Fatalf("production simulation default: %v %v", cfg.Auth.DevSimulation, err)
+	}
+	dev, _ := Load(lookupFrom(map[string]string{"APP_ENV": "development", "DATABASE_URL": "postgres://u:p@localhost:5434/e"}))
+	if !dev.Auth.DevSimulation {
+		t.Fatal("development should simulate OTP delivery")
+	}
+}
+
+func TestSecretsFromFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jwt")
+	secret := strings.Repeat("k", 40)
+	if err := os.WriteFile(path, []byte(secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := productionEnv(map[string]string{"JWT_SECRET_FILE": path})
+	delete(m, "JWT_SECRET")
+	cfg, err := Load(lookupFrom(m))
+	if err != nil || cfg.Auth.JWTSecret != secret {
+		t.Fatalf("secret file: %v", err)
+	}
+	m["JWT_SECRET_FILE"] = filepath.Join(t.TempDir(), "missing")
+	if _, err := Load(lookupFrom(m)); err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("missing secret file: %v", err)
 	}
 }

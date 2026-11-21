@@ -76,6 +76,8 @@ type IdleSessionCloser interface {
 // RefundProcessor is implemented by the payments service.
 type RefundProcessor interface {
 	ProcessRefunds(ctx context.Context) error
+	ReconcileWebhooks(ctx context.Context) error
+	ReleaseDeposits(ctx context.Context) error
 }
 
 func (j Jobs) q(ctx context.Context) *db.Queries { return database.Queries(ctx, j.Pool) }
@@ -95,6 +97,8 @@ func (j Jobs) All() []Job {
 		{Name: "bookings.release_processing", Interval: time.Minute, Run: j.ReleaseProcessing},
 		{Name: "bookings.lapse_extensions", Interval: 5 * time.Minute, Run: j.LapseExtensions},
 		{Name: "refunds.process", Interval: time.Minute, Timeout: 2 * time.Minute, Run: j.ProcessRefunds},
+		{Name: "deposits.release", Interval: time.Minute, Timeout: 2 * time.Minute, Run: j.ReleaseDeposits},
+		{Name: "payments.reconcile_webhooks", Interval: time.Minute, Timeout: 2 * time.Minute, Run: j.ReconcileWebhooks},
 		{Name: "tracking.close_idle_sessions", Interval: 10 * time.Minute, Run: j.CloseIdleSessions},
 		{Name: "worklogs.auto_approve", Interval: 15 * time.Minute, Run: j.AutoApproveWorkLogs},
 		{Name: "cleanup.expired_keys", Interval: time.Hour, Timeout: 5 * time.Minute, Run: j.Cleanup},
@@ -221,6 +225,22 @@ func (j Jobs) ProcessRefunds(ctx context.Context) error {
 	return j.Refunds.ProcessRefunds(ctx)
 }
 
+// ReleaseDeposits refunds security deposits of completed bookings.
+func (j Jobs) ReleaseDeposits(ctx context.Context) error {
+	if j.Refunds == nil {
+		return nil
+	}
+	return j.Refunds.ReleaseDeposits(ctx)
+}
+
+// ReconcileWebhooks retries failed payment webhook events.
+func (j Jobs) ReconcileWebhooks(ctx context.Context) error {
+	if j.Refunds == nil {
+		return nil
+	}
+	return j.Refunds.ReconcileWebhooks(ctx)
+}
+
 // CloseIdleSessions ends location sessions that stopped reporting.
 func (j Jobs) CloseIdleSessions(ctx context.Context) error {
 	if j.Tracking == nil {
@@ -253,7 +273,11 @@ func (j Jobs) Cleanup(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	j.Log.Debug("cleanup", "idempotency_keys", keys, "otp_challenges", otps)
+	tokens, err := q.DeleteExpiredAuthTokens(ctx)
+	if err != nil {
+		return err
+	}
+	j.Log.Debug("cleanup", "idempotency_keys", keys, "otp_challenges", otps, "auth_tokens", tokens)
 	return nil
 }
 

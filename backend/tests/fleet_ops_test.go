@@ -52,6 +52,7 @@ func (e *env) addMember(t *testing.T, owner *user, role, name string) *user {
 	phone := randomPhone()
 	must(t, owner.do(http.MethodPost, "/orgs/"+owner.org+"/members", map[string]any{"phone": phone, "role": role, "full_name": name}), 201, "add "+role)
 	u := e.login(phone)
+	e.acceptInvitations(u)
 	u.org = owner.org
 	return u
 }
@@ -159,14 +160,14 @@ func TestFleetManagerMachineScope(t *testing.T) {
 
 	// Restriction: fleet management blocked → no machines, no new listings.
 	support := e.supportAdmin()
-	must(t, support.do(http.MethodPost, "/admin/users/"+fm.id+"/restrictions", map[string]any{"kind": "fleet_management", "reason": "Under investigation"}), 403, "admins cannot restrict (read-only)")
-	rst := e.restrict(fm.id, "fleet_management")
+	must(t, support.do(http.MethodPost, "/admin/users/"+fm.id+"/restrictions", map[string]any{"kind": "fleet_management", "reason": "Under investigation"}), 201, "support restricts")
+	rst := e.query1(`SELECT id::text FROM account_restrictions WHERE user_id = $1 AND kind = 'fleet_management' AND lifted_at IS NULL`, fm.id)
 	if ov := must(t, fm.do(http.MethodGet, "/fleet/"+org+"/overview", nil), 200, "restricted overview"); ov.num("equipment_total") != 0 {
 		t.Fatalf("restricted overview = %s", ov.raw)
 	}
 	must(t, fm.do(http.MethodGet, "/bookings/"+inFleet, nil), 404, "restricted booking access")
 	must(t, fm.do(http.MethodPost, "/owner/equipment", listingBody(nil)), 403, "restricted listing creation")
-	e.liftRestriction(rst, support.id)
+	must(t, support.do(http.MethodPost, "/admin/restrictions/"+rst+"/lift", map[string]any{"reason": "Cleared"}), 200, "support lifts")
 	must(t, fm.do(http.MethodGet, "/bookings/"+inFleet, nil), 200, "access back after lifting")
 
 	// Owner removes the manager from the fleet → access gone.
@@ -178,7 +179,7 @@ func TestFleetManagerMachineScope(t *testing.T) {
 	if len(all.list("data")) != 2 {
 		t.Fatalf("admin fleets = %s", all.raw)
 	}
-	must(t, ops.do(http.MethodPost, "/admin/fleets/"+fid+"/archive", map[string]any{"reason": "Duplicate account"}), 403, "admins cannot archive (read-only)")
+	must(t, ops.do(http.MethodPost, "/admin/fleets/"+fid+"/archive", map[string]any{"reason": "Duplicate account"}), 200, "ops archives")
 	must(t, m.customer.do(http.MethodGet, "/admin/fleets", nil), 403, "non-admin fleet accounts")
 }
 
@@ -264,8 +265,7 @@ func TestOperatorAssignmentConflictsAndReassignment(t *testing.T) {
 
 	// Restricted operators cannot be assigned.
 	support := e.supportAdmin()
-	must(t, support.do(http.MethodPost, "/admin/users/"+o.op1.id+"/restrictions", map[string]any{"kind": "operator_assignments", "reason": "Licence under review"}), 403, "admins cannot restrict (read-only)")
-	e.restrict(o.op1.id, "operator_assignments")
+	must(t, support.do(http.MethodPost, "/admin/users/"+o.op1.id+"/restrictions", map[string]any{"kind": "operator_assignments", "reason": "Licence under review"}), 201, "support restricts")
 	b4 := must(t, o.customer.do(http.MethodPost, "/bookings", map[string]any{
 		"equipment_id": eq2, "site_address_id": o.siteID, "period": map[string]any{"start": o.end.Add(20 * 24 * time.Hour), "end": o.end.Add(21 * 24 * time.Hour)},
 		"pricing_unit": "day", "with_operator": true, "work_description": "Restricted job", "payment_mode": "offline",
@@ -336,7 +336,7 @@ func TestOperatorJobStatusChangesAndEvidence(t *testing.T) {
 		t.Fatalf("queue = %s", queue.raw)
 	}
 	must(t, o.owner.do(http.MethodGet, "/admin/issues", nil), 403, "owners do not see the admin queue")
-	must(t, support.do(http.MethodPost, "/admin/issues/"+issue.str("id")+"/review", map[string]any{"status": "resolved", "note": "Owner replaced the hose"}), 403, "admins cannot review issues (read-only)")
+	must(t, support.do(http.MethodPost, "/admin/issues/"+issue.str("id")+"/review", map[string]any{"status": "resolved", "note": "Owner replaced the hose"}), 200, "support reviews")
 
 	// Return: the after-checklist (not below the handover hour meter) comes first.
 	must(t, o.customer.do(http.MethodPost, "/bookings/"+o.id+"/return-request", nil), 200, "return requested")

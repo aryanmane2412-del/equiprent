@@ -405,6 +405,7 @@ func TestOperatorVerificationWorkflow(t *testing.T) {
 	opPhone := randomPhone()
 	must(t, owner.do(http.MethodPost, "/orgs/"+owner.org+"/members", map[string]any{"phone": opPhone, "role": "operator", "full_name": "Suresh Jadhav"}), 201, "add operator")
 	op := e.login(opPhone)
+	e.acceptInvitations(op)
 	other := e.registerAndVerify("customer", "")
 
 	v := must(t, op.do(http.MethodGet, "/verification/operator", nil), 200, "operator view")

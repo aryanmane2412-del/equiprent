@@ -26,7 +26,8 @@ import (
 const (
 	maxAttempts         = 5
 	resendCooldown      = 30 * time.Second
-	otpPerPhoneLimit    = 5 // per hour
+	otpPerPhoneLimit    = 5  // per hour
+	otpPerPhoneDaily    = 10 // per 24 hours
 	emailResendCooldown = time.Minute
 	resetRequestLimit   = 5 // per identifier per hour
 
@@ -118,6 +119,11 @@ func (s *Service) issueOTP(ctx context.Context, phone, purpose, deviceID string)
 	}
 	if n > otpPerPhoneLimit {
 		return Challenge{}, "", apperror.ErrRateLimited.WithDetail("too many codes requested for this number").WithRetryAfter(ttl)
+	}
+	if d, dttl, err := s.store.Incr(ctx, "otp:daily:"+phone, 24*time.Hour); err != nil {
+		return Challenge{}, "", err
+	} else if d > otpPerPhoneDaily {
+		return Challenge{}, "", apperror.ErrRateLimited.WithDetail("too many codes requested for this number today").WithRetryAfter(dttl)
 	}
 	code, err := NewOTP()
 	if err != nil {
@@ -388,7 +394,9 @@ func (s *Service) Login(ctx context.Context, req LoginRequest, client ClientInfo
 	_ = s.store.Delete(ctx, lockKey(id))
 	if password.NeedsRehash(*acct.PasswordHash, s.hash) {
 		if h, err := password.Hash(req.Password, s.hash); err == nil {
-			_ = s.repo.SetPassword(ctx, acct.ID, h)
+			if err := s.repo.SetPassword(ctx, acct.ID, h); err != nil {
+				s.log.WarnContext(ctx, "password rehash not saved", "user_id", acct.ID, "error", err)
+			}
 		}
 	}
 	client.DeviceID, client.Platform = firstNonEmpty(req.DeviceID, client.DeviceID), firstNonEmpty(req.Platform, client.Platform)
@@ -650,7 +658,10 @@ func (s *Service) ResetPassword(ctx context.Context, req ResetPasswordRequest, c
 	if err := s.repo.RevokeAllSessions(ctx, acct.ID); err != nil {
 		return StatusResponse{}, err
 	}
-	_ = s.repo.InvalidateTokens(ctx, acct.ID, tokenPasswordReset)
+	// A reset token must never stay usable after the password changed.
+	if err := s.repo.InvalidateTokens(ctx, acct.ID, tokenPasswordReset); err != nil {
+		return StatusResponse{}, err
+	}
 	if acct.Email != nil {
 		_ = s.store.Delete(ctx, lockKey(*acct.Email))
 		_ = s.email.Send(ctx, *acct.Email, "Your EQUIPRENT password was changed", "Your password was reset and all devices were signed out. If this wasn't you, contact support immediately.")
@@ -711,6 +722,10 @@ func (s *Service) setPassword(ctx context.Context, acct Account, plain string) e
 
 // ---- email verification -----------------------------------------------------------------
 
+func emailTokenHash(email, token string) []byte {
+	return HashRefreshToken("email_verify|" + email + "|" + token)
+}
+
 // sendEmailToken issues a verification token for the address and sends it.
 func (s *Service) sendEmailToken(ctx context.Context, userID uuid.UUID, email string) (string, error) {
 	if !s.cfg.EmailEnabled() {
@@ -724,7 +739,9 @@ func (s *Service) sendEmailToken(ctx context.Context, userID uuid.UUID, email st
 		return "", err
 	}
 	token := fmt.Sprintf("%06d", n.Int64())
-	hash := HashRefreshToken(token)
+	// The stored hash covers the address, so two people holding the same 6-digit code can never
+	// collide on the unique token hash (which used to make registration or a resend fail).
+	hash := emailTokenHash(email, token)
 	if err := s.repo.CreateToken(ctx, userID, tokenEmailVerify, hash, email, s.now().Add(s.cfg.EmailTokenTTL)); err != nil {
 		return "", err
 	}
@@ -768,14 +785,17 @@ func (s *Service) SendEmailVerification(ctx context.Context, p *httpx.Principal,
 // VerifyEmail confirms an address with its token (no sign-in required, so
 // the link works on any device).
 func (s *Service) VerifyEmail(ctx context.Context, req VerifyEmailRequest, client ClientInfo) (StatusResponse, error) {
-	userID, email, err := s.repo.ConsumeToken(ctx, HashRefreshToken(req.Token), tokenEmailVerify)
-	if errors.Is(err, apperror.ErrNotFound) {
-		return StatusResponse{}, errTokenInvalid
-	}
+	// The code is bound to the address it was sent to and its newest token; every failure
+	// (unknown address, wrong code, expired, used, too many attempts) answers the same.
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	userID, ok, err := s.repo.VerifyToken(ctx, email, emailTokenHash(email, req.Token), tokenEmailVerify)
 	if err != nil {
 		return StatusResponse{}, err
 	}
-	ok, err := s.repo.MarkEmailVerified(ctx, userID, email)
+	if !ok {
+		return StatusResponse{}, errTokenInvalid
+	}
+	ok, err = s.repo.MarkEmailVerified(ctx, userID, email)
 	if err != nil {
 		return StatusResponse{}, err
 	}

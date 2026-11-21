@@ -104,7 +104,7 @@ var AllCategories = []string{CatBookings, CatPayments, CatAgreements, CatChat, C
 func Category(eventType string) string {
 	switch {
 	case eventType == events.BookingFinalCharges, strings.HasPrefix(eventType, "payment."),
-		strings.HasPrefix(eventType, "payout."), strings.HasPrefix(eventType, "refund."):
+		strings.HasPrefix(eventType, "payout."), strings.HasPrefix(eventType, "refund."), strings.HasPrefix(eventType, "deposit."):
 		return CatPayments
 	case strings.HasPrefix(eventType, "booking."), strings.HasPrefix(eventType, "dispute."), strings.HasPrefix(eventType, "issue."):
 		return CatBookings
@@ -564,6 +564,7 @@ var routes = map[string]route{
 		owner: &text{"Payment received", "The customer paid {amount} for {ref}."}},
 	events.PayoutPaid:            {toOwner: true, text: text{"Payment settled", "{amount} was settled to your bank account for {ref}."}},
 	events.RefundProcessed:       {toCustomer: true, text: text{"Refund processed", "{amount} was refunded for {ref}."}},
+	events.DepositReleased:       {toCustomer: true, text: text{"Security deposit refund started", "{amount} of your security deposit for {ref} is being refunded. Any deduction was for an approved damage claim."}},
 	events.AgreementSigned:       {toOwner: true, toCustomer: true, text: text{"Agreement signed", "{name} signed the rental agreement for {ref}."}},
 	events.AgreementExecuted:     {toOwner: true, toCustomer: true, text: text{"Agreement complete", "Both parties signed the agreement for {ref}. The PDF is ready."}},
 	events.ChatMessage:           {toUsers: true, pushOnly: true, text: text{"{name}", "{title}"}},

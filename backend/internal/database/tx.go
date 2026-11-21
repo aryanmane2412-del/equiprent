@@ -154,3 +154,7 @@ func (NoopTransactor) InTx(ctx context.Context, fn func(ctx context.Context) err
 func (NoopTransactor) InTxAs(ctx context.Context, _ Actor, fn func(ctx context.Context) error) error {
 	return fn(ctx)
 }
+
+// WithoutTx returns ctx detached from any transaction it carries, so the next
+// InTx call starts its own (used to commit or fail one item independently).
+func WithoutTx(ctx context.Context) context.Context { return context.WithValue(ctx, txKey{}, nil) }

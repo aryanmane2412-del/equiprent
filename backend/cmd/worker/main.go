@@ -11,11 +11,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/equiprent/backend/internal/app"
 	"github.com/equiprent/backend/internal/bootstrap"
 	"github.com/equiprent/backend/internal/db"
 	"github.com/equiprent/backend/internal/health"
+	"github.com/equiprent/backend/internal/modules/settlements"
 	"github.com/equiprent/backend/internal/worker"
 )
 
@@ -52,6 +54,14 @@ func run() error {
 	a := app.New(cfg, log, deps.DB, deps.Store())
 	jobs := worker.Jobs{Pool: deps.DB, Dispatcher: a.Notifications, Refunds: a.Payments, Tracking: a.Tracking, Log: log,
 		ProcessingTimeout: cfg.Booking.ProcessingTimeout}.All()
+	st := &settlements.Service{Pool: deps.DB, Tx: a.Tx, Gateway: settlements.SandboxGateway{}, Hold: cfg.Booking.SettlementHold, Log: log}
+	jobs = append(jobs,
+		worker.Job{Name: "settlements.create", Interval: 5 * time.Minute, Timeout: 2 * time.Minute, Run: func(c context.Context) error { _, err := st.CreateSettlements(c, 100); return err }},
+		worker.Job{Name: "settlements.release", Interval: 5 * time.Minute, Run: st.ReleaseDue},
+		// Sandbox gateway only: live transfers stay disabled until reconciliation is tested.
+		worker.Job{Name: "payouts.run", Interval: 15 * time.Minute, Timeout: 5 * time.Minute, Run: func(c context.Context) error { return st.RunPayouts(c, 200) }},
+		worker.Job{Name: "payouts.reconcile", Interval: time.Hour, Timeout: 5 * time.Minute, Run: func(c context.Context) error { return st.Reconcile(c, 200) }},
+	)
 	jobs = append(jobs, worker.Job{
 		Name: "heartbeat", Interval: cfg.Worker.HeartbeatInterval,
 		Run: func(ctx context.Context) error {

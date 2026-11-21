@@ -1271,10 +1271,16 @@ func (h *Handler) Routes(r *httpx.Router) {
 	}), httpx.Doc{Summary: "Issues reported on a booking", Response: IssueList{}})
 
 	ad := r.Tag("admin").Admin(httpx.RoleAdminOps, httpx.RoleAdminSupport)
+	// Explicit write permissions for ops and support only (finance and KYC admins stay read-only).
+	adWrite := ad.AdminWrites(
+		"POST /admin/issues/:id/review",
+		"POST /admin/users/:id/restrictions",
+		"POST /admin/restrictions/:id/lift",
+	)
 	ad.GET("/admin/issues", httpx.HandleQuery(200, func(c *gin.Context, _ *httpx.Principal, q IssueQuery) (any, error) {
 		return h.svc.Queue(c.Request.Context(), q)
 	}), httpx.Doc{Summary: "Reported issues, most severe first", Query: IssueQuery{}, Response: IssueList{}})
-	ad.POST("/admin/issues/:id/review", httpx.HandleJSON(200, func(c *gin.Context, p *httpx.Principal, req ReviewIssueRequest) (any, error) {
+	adWrite.POST("/admin/issues/:id/review", httpx.HandleJSON(200, func(c *gin.Context, p *httpx.Principal, req ReviewIssueRequest) (any, error) {
 		id, err := httpx.Param(c, "id")
 		if err != nil {
 			return nil, err
@@ -1284,7 +1290,7 @@ func (h *Handler) Routes(r *httpx.Router) {
 	ad.GET("/admin/restrictions", httpx.HandleQuery(200, func(c *gin.Context, _ *httpx.Principal, q RestrictionQuery) (any, error) {
 		return h.svc.Restrictions(c.Request.Context(), q)
 	}), httpx.Doc{Summary: "Account restrictions", Query: RestrictionQuery{}, Response: RestrictionList{}})
-	ad.POST("/admin/users/:id/restrictions", httpx.HandleJSON(201, func(c *gin.Context, p *httpx.Principal, req RestrictionRequest) (any, error) {
+	adWrite.POST("/admin/users/:id/restrictions", httpx.HandleJSON(201, func(c *gin.Context, p *httpx.Principal, req RestrictionRequest) (any, error) {
 		id, err := httpx.Param(c, "id")
 		if err != nil {
 			return nil, err
@@ -1292,7 +1298,7 @@ func (h *Handler) Routes(r *httpx.Router) {
 		return h.svc.Restrict(c.Request.Context(), p, id, req)
 	}), httpx.Doc{Summary: "Restrict an account", Request: RestrictionRequest{}, Response: Restriction{}, Status: 201,
 		Description: "operator_assignments: cannot be assigned jobs. fleet_management: loses access to fleet machines. new_bookings: cannot book. Use suspend for a full block."})
-	ad.POST("/admin/restrictions/:id/lift", httpx.HandleJSON(200, func(c *gin.Context, p *httpx.Principal, req LiftRequest) (any, error) {
+	adWrite.POST("/admin/restrictions/:id/lift", httpx.HandleJSON(200, func(c *gin.Context, p *httpx.Principal, req LiftRequest) (any, error) {
 		id, err := httpx.Param(c, "id")
 		if err != nil {
 			return nil, err

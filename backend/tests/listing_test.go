@@ -338,5 +338,5 @@ func TestCategoryManagement(t *testing.T) {
 	slug := "piling-rig-" + strings.ToLower(randomLetters(4))
 
 	must(t, owner.do(http.MethodPost, "/admin/categories", map[string]any{"slug": slug, "name_en": "Piling rig"}), 403, "owner adds category")
-	must(t, ops.do(http.MethodPost, "/admin/categories", map[string]any{"slug": slug, "name_en": "Piling rig"}), 403, "admins cannot add categories (read-only)")
+	must(t, ops.do(http.MethodPost, "/admin/categories", map[string]any{"slug": slug, "name_en": "Piling rig"}), 201, "ops adds a category")
 }

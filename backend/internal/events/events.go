@@ -51,6 +51,7 @@ const (
 	BookingFinalCharges = "booking.final_charges" // owner settled the final bill
 	PayoutPaid          = "payout.paid"           // routed; emitted once payouts are built
 	RefundProcessed     = "refund.processed"      // routed; emitted once refunds are built
+	DepositReleased     = "deposit.released"      // security deposit refund started after completion
 	AgreementSigned     = "agreement.signed"
 	AgreementExecuted   = "agreement.executed"
 	ChatMessage         = "chat.message"

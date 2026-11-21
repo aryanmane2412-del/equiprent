@@ -588,6 +588,9 @@ func (s *Service) RegisterDevice(ctx context.Context, sc httpx.Scope, equipmentI
 			CreatedBy: uuid.NullUUID{UUID: sc.P.UserID, Valid: true}})
 		return database.MapError(err)
 	})
+	if errors.Is(err, apperror.ErrNotFound) {
+		return RegisteredDevice{}, apperror.ErrNotFound
+	}
 	if errors.Is(err, apperror.ErrConflict) {
 		return RegisteredDevice{}, apperror.ErrConflict.WithDetail("this machine already has an active tracker, or the device is registered elsewhere")
 	}
@@ -598,8 +601,8 @@ func (s *Service) RegisterDevice(ctx context.Context, sc httpx.Scope, equipmentI
 		Status: row.Status, LastSeenAt: row.LastSeenAt, CreatedAt: row.CreatedAt}}, nil
 }
 
-func (s *Service) Devices(ctx context.Context, equipmentID uuid.UUID) (DeviceList, error) {
-	rows, err := s.q(ctx).ListTelematicsDevices(ctx, equipmentID)
+func (s *Service) Devices(ctx context.Context, org, equipmentID uuid.UUID) (DeviceList, error) {
+	rows, err := s.q(ctx).ListTelematicsDevices(ctx, db.ListTelematicsDevicesParams{EquipmentID: equipmentID, OwnerOrgID: org})
 	if err != nil {
 		return DeviceList{}, database.MapError(err)
 	}
@@ -613,7 +616,7 @@ func (s *Service) Devices(ctx context.Context, equipmentID uuid.UUID) (DeviceLis
 
 func (s *Service) RevokeDevice(ctx context.Context, sc httpx.Scope, equipmentID, deviceID uuid.UUID) error {
 	return s.tx.InTxAs(ctx, database.Actor{UserID: sc.P.UserID, Role: "owner", Reason: "tracker revoked"}, func(ctx context.Context) error {
-		n, err := s.q(ctx).RevokeTelematicsDevice(ctx, db.RevokeTelematicsDeviceParams{ID: deviceID, EquipmentID: equipmentID})
+		n, err := s.q(ctx).RevokeTelematicsDevice(ctx, db.RevokeTelematicsDeviceParams{ID: deviceID, EquipmentID: equipmentID, OwnerOrgID: sc.Org})
 		if err == nil && n == 0 {
 			return apperror.ErrNotFound
 		}
@@ -825,12 +828,12 @@ func (h *Handler) locationRoutes(r *httpx.Router) {
 		}
 		return h.svc.RegisterDevice(c.Request.Context(), sc, id, req)
 	}), httpx.Doc{Summary: "Fit a GPS tracker / telematics unit to a machine", Request: DeviceRequest{}, Response: RegisteredDevice{}, Status: 201, OrgScoped: true})
-	a.GET("/owner/equipment/:id/trackers", httpx.OrgHandle(200, ownerRoles, func(c *gin.Context, _ httpx.Scope) (any, error) {
+	a.GET("/owner/equipment/:id/trackers", httpx.OrgHandle(200, ownerRoles, func(c *gin.Context, sc httpx.Scope) (any, error) {
 		id, err := httpx.Param(c, "id")
 		if err != nil {
 			return nil, err
 		}
-		return h.svc.Devices(c.Request.Context(), id)
+		return h.svc.Devices(c.Request.Context(), sc.Org, id)
 	}), httpx.Doc{Summary: "A machine's trackers", Response: DeviceList{}, OrgScoped: true})
 	a.DELETE("/owner/equipment/:id/trackers/:device_id", httpx.OrgHandle(204, ownerRoles, func(c *gin.Context, sc httpx.Scope) (any, error) {
 		id, err := httpx.Param(c, "id")

@@ -855,6 +855,7 @@ func (h *Handler) Routes(r *httpx.Router) {
 
 	// Admins oversee fleet accounts.
 	ad := r.Tag("fleet").Admin(httpx.RoleAdminOps, httpx.RoleAdminSupport)
+	adWrite := ad.AdminWrites("POST /admin/fleets/:id/archive") // an explicit, role-limited write
 	ad.GET("/admin/fleets", httpx.HandleQuery(200, func(c *gin.Context, p *httpx.Principal, q AdminFleetQuery) (any, error) {
 		org := uuid.Nil
 		if q.OrgID != "" {
@@ -862,7 +863,7 @@ func (h *Handler) Routes(r *httpx.Router) {
 		}
 		return h.svc.Fleets(c.Request.Context(), p, org, q.Status)
 	}), httpx.Doc{Summary: "Fleets across organisations", Query: AdminFleetQuery{}, Response: FleetList{}})
-	ad.POST("/admin/fleets/:id/archive", httpx.HandleJSON(200, func(c *gin.Context, p *httpx.Principal, req ArchiveRequest) (any, error) {
+	adWrite.POST("/admin/fleets/:id/archive", httpx.HandleJSON(200, func(c *gin.Context, p *httpx.Principal, req ArchiveRequest) (any, error) {
 		id, err := httpx.Param(c, "id")
 		if err != nil {
 			return nil, err

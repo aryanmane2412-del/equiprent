@@ -217,6 +217,7 @@ func TestBookingEngineCustomerAndOwnerJourney(t *testing.T) {
 	opPhone := randomPhone()
 	must(t, owner.do(http.MethodPost, "/orgs/"+owner.org+"/members", map[string]any{"phone": opPhone, "role": "operator", "full_name": "Ramesh"}), 201, "add operator")
 	operator := e.login(opPhone)
+	e.acceptInvitations(operator)
 	e.verifyOperator(operator, m.kyc)
 	if !slices.Contains(actions(m.get(t, owner, id)), "assign_operator") {
 		t.Fatal("owner should be offered to assign an operator")

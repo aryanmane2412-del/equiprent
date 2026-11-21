@@ -421,7 +421,9 @@ func actionsFor(b Booking, side Side, pending *Extension, money *MoneySummary) [
 // decorate fills the caller-specific parts of the detail view.
 func (s *Service) decorate(ctx context.Context, b *Booking, side Side) error {
 	var est Price
-	_ = json.Unmarshal(b.Price, &est)
+	if err := decodeStored(b.Price, &est, "booking price"); err != nil {
+		return err
+	}
 
 	paid, refunded, err := s.repo.PaymentTotals(ctx, b.ID)
 	if err != nil {
@@ -480,7 +482,9 @@ func (s *Service) decorate(ctx context.Context, b *Booking, side Side) error {
 	}
 
 	var rules []CancellationRule
-	_ = json.Unmarshal(b.cancellationRules, &rules)
+	if err := decodeStored(b.cancellationRules, &rules, "cancellation rules"); err != nil {
+		return err
+	}
 	cv := &CancellationView{Rules: rules, Summary: PolicySummary(rules)}
 	if rules == nil {
 		cv.Rules = []CancellationRule{}
@@ -542,7 +546,9 @@ func (s *Service) Policy(ctx context.Context) (Policy, error) {
 		return Policy{}, err
 	}
 	var rules []CancellationRule
-	_ = json.Unmarshal(raw, &rules)
+	if err := decodeStored(raw, &rules, "default cancellation rules"); err != nil {
+		return Policy{}, err
+	}
 	if rules == nil {
 		rules = []CancellationRule{}
 	}

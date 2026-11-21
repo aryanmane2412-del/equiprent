@@ -49,6 +49,38 @@ type Member struct {
 	Phone     string    `json:"phone"`
 	Role      string    `json:"role"`
 	GrantedAt time.Time `json:"granted_at"`
+	// Status is "invited" for an operator invitation awaiting the person's acceptance.
+	Status       string     `json:"status,omitempty"`
+	InvitationID *uuid.UUID `json:"invitation_id,omitempty"`
+}
+
+// Invitation is an offer to join an organisation, answered by the invitee.
+type Invitation struct {
+	ID               uuid.UUID `json:"id"`
+	OrganizationID   uuid.UUID `json:"organization_id"`
+	OrganizationName string    `json:"organization_name"`
+	Role             string    `json:"role"`
+	CreatedAt        time.Time `json:"created_at"`
+	ExpiresAt        time.Time `json:"expires_at"`
+}
+
+type InvitationList struct {
+	Data []Invitation `json:"data"`
+}
+
+// OrgInvitation is a pending invitation as the organisation sees it.
+type OrgInvitation struct {
+	ID        uuid.UUID `json:"id"`
+	UserID    uuid.UUID `json:"user_id"`
+	FullName  string    `json:"full_name"`
+	Phone     string    `json:"phone"`
+	Role      string    `json:"role"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type OrgInvitationList struct {
+	Data []OrgInvitation `json:"data"`
 }
 
 // Address is a saved site or yard.

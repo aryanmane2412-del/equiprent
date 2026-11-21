@@ -43,11 +43,21 @@ type Checker struct{ pool *pgxpool.Pool }
 func NewChecker(pool *pgxpool.Pool) *Checker { return &Checker{pool: pool} }
 
 func (c *Checker) CanManage(ctx context.Context, p *httpx.Principal, org, equipmentID uuid.UUID) error {
-	if p.HasOrgRole(org, httpx.RoleOwner) {
-		return nil
-	}
-	if !p.HasOrgRole(org, httpx.RoleFleetManager) {
+	isOwner := p.HasOrgRole(org, httpx.RoleOwner)
+	if !isOwner && !p.HasOrgRole(org, httpx.RoleFleetManager) {
 		return apperror.ErrForbidden
+	}
+	// A role in an organisation never grants a machine of another one: the machine
+	// must belong to that organisation (and is not disclosed otherwise).
+	owned, err := database.Queries(ctx, c.pool).EquipmentOwnedByOrg(ctx, db.EquipmentOwnedByOrgParams{EquipmentID: equipmentID, OrgID: org})
+	if err != nil {
+		return database.MapError(err)
+	}
+	if !owned {
+		return apperror.ErrNotFound
+	}
+	if isOwner {
+		return nil
 	}
 	row, err := database.Queries(ctx, c.pool).FleetManagerEquipmentAccess(ctx, db.FleetManagerEquipmentAccessParams{
 		UserID: p.UserID, OrganizationID: org, EquipmentID: equipmentID,

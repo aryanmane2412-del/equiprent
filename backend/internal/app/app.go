@@ -61,6 +61,7 @@ type App struct {
 	Bookings      *bookings.Service
 	Notifications *notifications.Service
 	Payments      *payments.Service
+	Disputes      *disputes.Service
 	Tracking      *tracking.Service
 	Tx            database.Transactor
 }
@@ -121,6 +122,7 @@ func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool, store cache.St
 	}
 
 	equipmentSvc := equipment.NewService(equipment.NewRepository(pool, tx))
+	equipmentSvc.WithAudit(tx)
 	equipmentSvc.WithMedia(uploadSvc, equipment.MediaOptions{PhotoTTL: cfg.Storage.AvatarURLTTL, DocumentTTL: cfg.Storage.URLTTL})
 	bookingSvc := bookings.NewService(bookings.NewRepository(pool), tx, cfg.Booking).WithScope(equipmentAccess)
 	inspectionSvc := operations.NewService(pool, tx, bookingSvc, uploadSvc, cfg.Storage.URLTTL).WithDemoGate(cfg.Env != config.EnvProduction && os.Getenv("DEMO_SKIP_INSPECTION_GATE") == "true")
@@ -161,6 +163,7 @@ func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool, store cache.St
 			IdleTimeout: cfg.Tracking.IdleTimeout, Origins: wsOrigins(cfg)})
 
 	paymentSvc := payments.NewService(payments.NewRepository(pool), bookingSvc, gateway, tx, log)
+	disputeSvc := disputes.NewService(disputes.NewRepository(pool), bookingSvc, tx)
 
 	var geocoder discovery.Geocoder
 	if cfg.Maps.Google() {
@@ -192,14 +195,14 @@ func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool, store cache.St
 			WithLinks(invoices.NewLinks(cfg.Storage.SigningSecret, strings.TrimRight(cfg.Docs.PublicURL, "/")+"/api/v1", cfg.Storage.URLTTL)),
 		agreements.NewHandler(agreements.NewService(agreements.NewRepository(pool), bookingSvc, uploadSvc, esign, tx, cfg.Storage.URLTTL, log).RequireReviewedTemplates(cfg.Legal.RequireReviewed)),
 		reviews.NewHandler(reviews.NewService(reviews.NewRepository(pool), bookingSvc, tx)),
-		disputes.NewHandler(disputes.NewService(disputes.NewRepository(pool), bookingSvc, tx)),
+		disputes.NewHandler(disputeSvc),
 		admin.NewHandler(admin.NewService(admin.NewRepository(pool), tx, equipmentSvc, bookingSvc)),
 		uploads.NewHandler(uploadSvc, cfg.Storage.MaxUploadBytes),
 		verification.NewHandler(verifySvc),
 	}
 	return &App{
 		Modules: modules, Guards: guards, Limiter: limiter, Auth: authSvc,
-		Bookings: bookingSvc, Notifications: notifySvc, Payments: paymentSvc, Tracking: trackingSvc, Tx: tx,
+		Bookings: bookingSvc, Notifications: notifySvc, Payments: paymentSvc, Disputes: disputeSvc, Tracking: trackingSvc, Tx: tx,
 	}
 }
 

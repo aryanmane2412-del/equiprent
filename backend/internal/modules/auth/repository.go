@@ -41,6 +41,7 @@ type Repository interface {
 
 	CreateToken(ctx context.Context, userID uuid.UUID, purpose string, hash []byte, email string, expiresAt time.Time) error
 	ConsumeToken(ctx context.Context, hash []byte, purpose string) (uuid.UUID, string, error)
+	VerifyToken(ctx context.Context, email string, hash []byte, purpose string) (uuid.UUID, bool, error)
 	InvalidateTokens(ctx context.Context, userID uuid.UUID, purpose string) error
 
 	CreateSession(ctx context.Context, s NewSession) (Session, error)
@@ -262,6 +263,23 @@ func (r *PGRepository) CreateToken(ctx context.Context, userID uuid.UUID, purpos
 func (r *PGRepository) ConsumeToken(ctx context.Context, hash []byte, purpose string) (uuid.UUID, string, error) {
 	row, err := r.q(ctx).ConsumeAuthToken(ctx, db.ConsumeAuthTokenParams{TokenHash: hash, Purpose: purpose})
 	return row.UserID, row.Email, database.MapError(err)
+}
+
+// VerifyToken checks a code against the newest live token of the address. found is false
+// when there is no live token (none sent, expired, used or too many wrong attempts).
+func (r *PGRepository) VerifyToken(ctx context.Context, email string, hash []byte, purpose string) (uuid.UUID, bool, error) {
+	row, err := r.q(ctx).VerifyAuthToken(ctx, db.VerifyAuthTokenParams{Email: email, Purpose: purpose, TokenHash: hash})
+	if err != nil {
+		err = database.MapError(err)
+		if errors.Is(err, apperror.ErrNotFound) {
+			return uuid.Nil, false, nil
+		}
+		return uuid.Nil, false, err
+	}
+	if !row.Ok {
+		return uuid.Nil, false, nil
+	}
+	return row.UserID, true, nil
 }
 
 func (r *PGRepository) InvalidateTokens(ctx context.Context, userID uuid.UUID, purpose string) error {

@@ -3,6 +3,7 @@ package users
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,6 +26,10 @@ type Repository interface {
 	Members(ctx context.Context, orgID uuid.UUID) ([]Member, error)
 	AddMember(ctx context.Context, orgID, grantedBy uuid.UUID, req AddMemberRequest) (Member, error)
 	RemoveMember(ctx context.Context, orgID, userID uuid.UUID, role string) (bool, error)
+	MyInvitations(ctx context.Context, userID uuid.UUID) ([]Invitation, error)
+	RespondInvitation(ctx context.Context, userID, id uuid.UUID, accept bool) error
+	OrgInvitations(ctx context.Context, orgID uuid.UUID) ([]OrgInvitation, error)
+	RevokeInvitation(ctx context.Context, orgID, id uuid.UUID) (bool, error)
 	Addresses(ctx context.Context, orgID uuid.UUID) ([]Address, error)
 	CreateAddress(ctx context.Context, orgID uuid.UUID, req CreateAddressRequest) (Address, error)
 	DeleteAddress(ctx context.Context, orgID, id uuid.UUID) (bool, error)
@@ -124,6 +129,26 @@ func (r *PGRepository) AddMember(ctx context.Context, orgID, grantedBy uuid.UUID
 				return err
 			}
 		}
+		if req.Role == httpx.RoleOperator {
+			// An operator is never assigned by phone: the person must accept an invitation.
+			// Nothing about an existing account or operator profile changes here.
+			held, err := q.IsOrgOperator(ctx, db.IsOrgOperatorParams{UserID: u.ID, OrganizationID: uuid.NullUUID{UUID: orgID, Valid: true}})
+			if err != nil {
+				return err
+			}
+			if held {
+				return apperror.ErrConflict.WithDetail("this person is already an operator of the organisation")
+			}
+			inv, err := q.InsertInvitation(ctx, db.InsertInvitationParams{OrganizationID: orgID, InviteeUserID: u.ID, RoleCode: req.Role, InvitedBy: grantedBy})
+			if err != nil {
+				if errors.Is(database.MapError(err), apperror.ErrNotFound) {
+					return apperror.ErrConflict.WithDetail("an invitation to this person is already pending")
+				}
+				return err
+			}
+			out = Member{UserID: u.ID, FullName: req.FullName, Phone: req.Phone, Role: req.Role, GrantedAt: inv.CreatedAt, Status: "invited", InvitationID: &inv.ID}
+			return nil
+		}
 		g, err := q.GrantRole(ctx, db.GrantRoleParams{
 			UserID: u.ID, RoleCode: req.Role,
 			OrganizationID: uuid.NullUUID{UUID: orgID, Valid: true},
@@ -132,22 +157,89 @@ func (r *PGRepository) AddMember(ctx context.Context, orgID, grantedBy uuid.UUID
 		if err != nil {
 			return err
 		}
-		if req.Role == httpx.RoleOperator {
-			if _, err := q.UpsertOperatorProfile(ctx, db.UpsertOperatorProfileParams{
-				UserID: u.ID, EmployerOrganizationID: uuid.NullUUID{UUID: orgID, Valid: true},
-			}); err != nil {
-				return err
-			}
-		}
 		if req.Role == httpx.RoleOwner || req.Role == httpx.RoleFleetManager {
 			if err := q.MarkOrgSupplier(ctx, orgID); err != nil {
 				return err
 			}
 		}
-		out = Member{UserID: u.ID, FullName: u.FullName, Phone: u.Phone, Role: g.RoleCode, GrantedAt: g.GrantedAt}
+		// Echo what the caller sent, never the stored name of an existing account (no lookup by phone).
+		out = Member{UserID: u.ID, FullName: req.FullName, Phone: req.Phone, Role: g.RoleCode, GrantedAt: g.GrantedAt}
 		return nil
 	})
 	return out, database.MapError(err)
+}
+
+func (r *PGRepository) MyInvitations(ctx context.Context, userID uuid.UUID) ([]Invitation, error) {
+	rows, err := r.q(ctx).ListMyInvitations(ctx, userID)
+	if err != nil {
+		return nil, database.MapError(err)
+	}
+	out := make([]Invitation, 0, len(rows))
+	for _, x := range rows {
+		out = append(out, Invitation{ID: x.ID, OrganizationID: x.OrganizationID, OrganizationName: x.OrganizationName, Role: x.RoleCode, CreatedAt: x.CreatedAt, ExpiresAt: x.ExpiresAt})
+	}
+	return out, nil
+}
+
+// RespondInvitation accepts or declines the caller's own invitation. Accepting grants the
+// role and attaches the operator to the organisation: only the employer changes, never
+// licence, experience, duty or verification data. A person who still works for another
+// organisation cannot be moved by an invitation; they must leave it first.
+func (r *PGRepository) RespondInvitation(ctx context.Context, userID, id uuid.UUID, accept bool) error {
+	err := r.tx.InTxAs(ctx, database.Actor{UserID: userID, Role: httpx.RoleOperator, Reason: "invitation answered"}, func(ctx context.Context) error {
+		q := r.q(ctx)
+		inv, err := q.GetInvitationForUpdate(ctx, db.GetInvitationForUpdateParams{ID: id, UserID: userID})
+		if err != nil {
+			return err
+		}
+		if inv.Status != "pending" || !inv.ExpiresAt.After(time.Now()) {
+			return apperror.ErrConflict.WithDetail("this invitation is no longer open")
+		}
+		if !accept {
+			_, err := q.RespondInvitation(ctx, db.RespondInvitationParams{ID: id, Status: "declined"})
+			return err
+		}
+		elsewhere, err := q.OperatorActiveElsewhere(ctx, db.OperatorActiveElsewhereParams{UserID: userID, OrganizationID: inv.OrganizationID})
+		if err != nil {
+			return err
+		}
+		if elsewhere {
+			return apperror.ErrConflict.WithDetail("you still work for another organisation; ask them to release you before joining a new one")
+		}
+		if n, err := q.RespondInvitation(ctx, db.RespondInvitationParams{ID: id, Status: "accepted"}); err != nil || n == 0 {
+			if err == nil {
+				err = apperror.ErrConflict.WithDetail("this invitation is no longer open")
+			}
+			return err
+		}
+		if _, err := q.GrantRole(ctx, db.GrantRoleParams{UserID: userID, RoleCode: inv.RoleCode,
+			OrganizationID: uuid.NullUUID{UUID: inv.OrganizationID, Valid: true}, GrantedBy: uuid.NullUUID{UUID: inv.InvitedBy, Valid: true}}); err != nil {
+			return err
+		}
+		if err := q.InsertOperatorProfileIfAbsent(ctx, db.InsertOperatorProfileIfAbsentParams{UserID: userID, EmployerOrganizationID: uuid.NullUUID{UUID: inv.OrganizationID, Valid: true}}); err != nil {
+			return err
+		}
+		_, err = q.SetOperatorEmployer(ctx, db.SetOperatorEmployerParams{UserID: userID, EmployerOrganizationID: uuid.NullUUID{UUID: inv.OrganizationID, Valid: true}})
+		return err
+	})
+	return database.MapError(err)
+}
+
+func (r *PGRepository) OrgInvitations(ctx context.Context, orgID uuid.UUID) ([]OrgInvitation, error) {
+	rows, err := r.q(ctx).ListOrgInvitations(ctx, orgID)
+	if err != nil {
+		return nil, database.MapError(err)
+	}
+	out := make([]OrgInvitation, 0, len(rows))
+	for _, x := range rows {
+		out = append(out, OrgInvitation{ID: x.ID, UserID: x.InviteeUserID, FullName: x.FullName, Phone: x.Phone, Role: x.RoleCode, CreatedAt: x.CreatedAt, ExpiresAt: x.ExpiresAt})
+	}
+	return out, nil
+}
+
+func (r *PGRepository) RevokeInvitation(ctx context.Context, orgID, id uuid.UUID) (bool, error) {
+	n, err := r.q(ctx).RevokeInvitation(ctx, db.RevokeInvitationParams{ID: id, OrganizationID: orgID})
+	return n > 0, database.MapError(err)
 }
 
 func (r *PGRepository) RemoveMember(ctx context.Context, orgID, userID uuid.UUID, role string) (bool, error) {

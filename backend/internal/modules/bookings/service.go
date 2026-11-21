@@ -1087,6 +1087,25 @@ func (s *Service) MarkDisputed(ctx context.Context, b Booking) error {
 	return err
 }
 
+// ResumeAfterDispute returns a disputed booking to the state it was in when the
+// dispute was opened (return, inspection and payment requirements still apply from
+// there). Called by the disputes module once no dispute on the booking is open.
+func (s *Service) ResumeAfterDispute(ctx context.Context, bookingID uuid.UUID) error {
+	b, err := s.repo.Get(ctx, bookingID)
+	if err != nil {
+		return err
+	}
+	if b.Status != StatusDisputed {
+		return nil
+	}
+	to := StatusCompleted // bookings disputed before the previous state was recorded
+	if b.ResumeStatus != nil {
+		to = *b.ResumeStatus
+	}
+	_, err = s.repo.Transition(ctx, b.ID, b.Status, b.Version, to, nil)
+	return err
+}
+
 // Load returns a booking for system use (no access check).
 func (s *Service) Load(ctx context.Context, id uuid.UUID) (Booking, error) {
 	return s.repo.Get(ctx, id)

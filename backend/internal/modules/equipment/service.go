@@ -3,6 +3,7 @@ package equipment
 import (
 	"context"
 	"errors"
+	"github.com/equiprent/backend/internal/database"
 	"math"
 	"regexp"
 	"slices"
@@ -26,6 +27,7 @@ type Service struct {
 	ext      ListingStore // nil in unit tests with a minimal fake
 	media    Media        // nil until WithMedia
 	mediaOpt MediaOptions
+	tx       database.Transactor
 }
 
 func NewService(repo Repository) *Service {

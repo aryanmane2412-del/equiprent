@@ -217,6 +217,7 @@ func TestRentalLifecycle(t *testing.T) {
 	opPhone := randomPhone()
 	must(t, owner.do(http.MethodPost, "/orgs/"+owner.org+"/members", map[string]any{"phone": opPhone, "role": "operator", "full_name": "Suresh"}), 201, "add operator")
 	operator := e.login(opPhone)
+	e.acceptInvitations(operator)
 	must(t, operator.do(http.MethodPut, "/operators/me/profile", map[string]any{
 		"licence_number": "MH1220150001234", "licence_class": "HMV", "licence_expires_on": "2030-01-31", "experience_years": 8, "skills": []string{"excavator"},
 	}), 200, "operator profile")
