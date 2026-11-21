@@ -39,8 +39,7 @@ jobs:
           go test -count=1 -p 1 -timeout 20m -v ./... 2>&1 | tee test.log | grep -E '^(--- FAIL|FAIL|ok|panic)' || true
           if grep -q '^--- FAIL\|^FAIL\|^panic:' test.log; then
             echo 'tests failed'
-            summary=$(grep -E -B1 -A12 '^(--- FAIL|panic:)' test.log | head -60 | sed ':a;N;$!ba;s/%/%25/g;s///g;s/
-/%0A/g')
+            summary=$(grep -E -B1 -A12 '^(--- FAIL|panic:)' test.log | head -60 | tr -d '\r' | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
             echo "::error title=Failing tests::${summary}"
             exit 1
           fi
