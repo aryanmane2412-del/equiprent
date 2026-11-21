@@ -134,7 +134,6 @@ class OperatorTodayPage extends ConsumerWidget {
         },
         child: PageBody(
           children: [
-            const SectionHeader(title: 'Open jobs'),
             AsyncBody(
               value: current,
               onRetry: () => ref.invalidate(myJobsProvider('current')),
@@ -144,7 +143,7 @@ class OperatorTodayPage extends ConsumerWidget {
                       title: 'No open jobs',
                       message: 'New assignments appear here and notify you.',
                     )
-                  : Column(children: [for (final j in jobs) _JobCard(job: j)]),
+                  : _TodayJobs(jobs: jobs),
             ),
             const Gap(AppSpacing.lg),
             const SectionHeader(title: 'Next 14 days'),
@@ -171,6 +170,284 @@ class OperatorTodayPage extends ConsumerWidget {
                     ),
             ),
             const Gap(AppSpacing.xl),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Today's dispatches, laid out like the driver design: the active dispatch with its actions,
+/// the pre-trip safety check (beside it on wide screens, below it on phones), then what is next.
+class _TodayJobs extends StatelessWidget {
+  const _TodayJobs({required this.jobs});
+  final List<JobSummary> jobs;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = jobs.first;
+    final upNext = jobs.skip(1).toList();
+    final wide = !context.windowSize.isCompact;
+    final dispatch = _ActiveDispatchCard(job: active);
+    final check = _SafetyCheckCard(job: active);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (wide)
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(flex: 3, child: dispatch),
+              const Gap(AppSpacing.md),
+              Expanded(flex: 2, child: check),
+            ],
+          )
+        else ...[
+          dispatch,
+          const Gap(AppSpacing.md),
+          check,
+        ],
+        if (upNext.isNotEmpty) ...[
+          const Gap(AppSpacing.lg),
+          SectionHeader(title: wide ? 'Upcoming deliveries' : 'Up next'),
+          for (final j in upNext) _UpNextCard(job: j),
+        ],
+      ],
+    );
+  }
+}
+
+/// A small grey tile with a caps label, e.g. DROP-OFF / the site.
+class _InfoTile extends StatelessWidget {
+  const _InfoTile({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.slate100,
+        borderRadius: BorderRadius.circular(AppRadius.md),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: AppColors.onWarningContainer,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.4,
+            ),
+          ),
+          Text(value, style: theme.textTheme.titleSmall),
+        ],
+      ),
+    );
+  }
+}
+
+/// The job the driver is on: reference and state, the machine, where and when, and the actions.
+class _ActiveDispatchCard extends StatelessWidget {
+  const _ActiveDispatchCard({required this.job});
+  final JobSummary job;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AppCard(
+      key: Key('job-${job.bookingId}'),
+      onTap: () => context.push(OperatorJobRoutes.job(job.bookingId)),
+      borderColor: job.awaitingAnswer ? AppColors.orange500 : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'ACTIVE DISPATCH • ${job.reference}',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: AppColors.onWarningContainer,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+              ),
+              StatusBadge(
+                label: job.awaitingAnswer
+                    ? 'Needs your answer'
+                    : _statusLabel(job.bookingStatus),
+                tone: _assignmentTone(job.assignmentStatus),
+              ),
+            ],
+          ),
+          const Gap(AppSpacing.xs),
+          Text(job.equipmentTitle, style: theme.textTheme.headlineSmall),
+          if (job.registrationNo != null)
+            Text(
+              job.registrationNo!,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: AppColors.slate500,
+              ),
+            ),
+          const Gap(AppSpacing.md),
+          _InfoTile(
+            label: 'DROP-OFF',
+            value: job.site.isEmpty ? 'Shown once you accept' : job.site,
+          ),
+          const Gap(AppSpacing.sm),
+          _InfoTile(label: 'WHEN', value: Fmt.dateRange(job.start, job.end)),
+          if (job.customerName.isNotEmpty) ...[
+            const Gap(AppSpacing.sm),
+            _InfoTile(label: 'CUSTOMER', value: job.customerName),
+          ],
+          const Gap(AppSpacing.md),
+          _ActionRow(
+            children: [
+              AppButton(
+                key: Key('active-gps-${job.bookingId}'),
+                label: 'Open GPS',
+                icon: AppIcons.navigation,
+                expand: true,
+                onPressed: () =>
+                    context.push(OperatorJobRoutes.navigate(job.bookingId)),
+              ),
+              AppButton(
+                key: Key('active-open-${job.bookingId}'),
+                label: job.awaitingAnswer ? 'Respond' : 'Open job',
+                icon: AppIcons.checkCircle,
+                variant: AppButtonVariant.success,
+                expand: true,
+                onPressed: () =>
+                    context.push(OperatorJobRoutes.job(job.bookingId)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Action buttons that fill the card: side by side on wide screens, stacked on phones.
+class _ActionRow extends StatelessWidget {
+  const _ActionRow({required this.children});
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    if (context.windowSize.isCompact) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < children.length; i++) ...[
+            if (i > 0) const Gap(AppSpacing.sm),
+            children[i],
+          ],
+        ],
+      );
+    }
+    return Row(
+      children: [
+        for (var i = 0; i < children.length; i++) ...[
+          if (i > 0) const Gap(AppSpacing.sm),
+          Expanded(child: children[i]),
+        ],
+      ],
+    );
+  }
+}
+
+/// The pre-trip safety check: leads to the job's handover checklist.
+class _SafetyCheckCard extends StatelessWidget {
+  const _SafetyCheckCard({required this.job});
+  final JobSummary job;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AppCard(
+      key: Key('safety-check-${job.bookingId}'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Pre-trip safety check', style: theme.textTheme.headlineSmall),
+          const Gap(AppSpacing.xs),
+          Text(
+            'Required before unloading at the job site.',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: AppColors.slate600,
+            ),
+          ),
+          const Gap(AppSpacing.md),
+          AppButton(
+            key: Key('safety-open-${job.bookingId}'),
+            label: 'Open safety checklist',
+            icon: AppIcons.handover,
+            variant: AppButtonVariant.accent,
+            expand: true,
+            onPressed: () => context.push(
+              OperatorJobRoutes.checklist(job.bookingId, 'handover'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A job coming up after the active one.
+class _UpNextCard extends StatelessWidget {
+  const _UpNextCard({required this.job});
+  final JobSummary job;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+      child: AppCard(
+        key: Key('up-next-${job.bookingId}'),
+        onTap: () => context.push(OperatorJobRoutes.job(job.bookingId)),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${Fmt.dayDate(job.start)} • ${job.reference}',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: AppColors.slate600,
+                    ),
+                  ),
+                  Text(job.equipmentTitle, style: theme.textTheme.titleMedium),
+                  if (job.site.isNotEmpty)
+                    Text(
+                      job.site,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: AppColors.slate500,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const Gap(AppSpacing.sm),
+            AppButton(
+              label: job.awaitingAnswer ? 'Respond' : 'Start',
+              icon: AppIcons.play,
+              size: AppButtonSize.small,
+              onPressed: () =>
+                  context.push(OperatorJobRoutes.job(job.bookingId)),
+            ),
           ],
         ),
       ),
