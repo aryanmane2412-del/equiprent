@@ -105,6 +105,11 @@ class CustomerHomePage extends ConsumerWidget {
           const Gap(AppSpacing.lg),
           SectionHeader(
             title: l.recentlyListed,
+            subtitle: switch (equipment) {
+              AsyncData(value: final page) =>
+                'Showing ${page.items.take(8).length} vehicles',
+              _ => null,
+            },
             actionLabel: l.seeAll,
             onAction: () => context.go(CustomerRoutes.search),
           ),

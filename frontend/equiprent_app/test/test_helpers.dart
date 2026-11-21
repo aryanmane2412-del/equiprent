@@ -90,6 +90,8 @@ Future<ProviderContainer> pumpApp(
   FakeLiveChannel? live,
   LocationSource? location,
   LocaleStore? localeStore,
+  AdminStats? adminStats,
+  List<AdminDisputeRow>? adminDisputes,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -130,6 +132,12 @@ Future<ProviderContainer> pumpApp(
         (ref) async => const OwnerDashboard(),
       ),
       ownerEarningsProvider.overrideWith((ref) async => const OwnerEarnings()),
+      adminStatsProvider.overrideWith(
+        (ref) async => adminStats ?? const AdminStats(),
+      ),
+      adminOpenDisputesProvider.overrideWith(
+        (ref) async => adminDisputes ?? const <AdminDisputeRow>[],
+      ),
       adminAnalyticsProvider.overrideWith(
         (ref, range) async => const AdminAnalyticsSnapshot(
           summary: AdminMonitorSnapshot({}),
