@@ -718,3 +718,10 @@ These are honest gaps, listed so nobody assumes they exist:
 - **API_DESIGN endpoints not implemented yet:** RFQs and quotes, daily work-log approval (handover/return checklists are built, §3f), offline payment recording, settlements and payouts and the double-entry ledger postings, WebSocket live tracking and chat, TOTP / second factor for admins (admins currently sign in like everyone else and hold a platform role), phone-number change, and data-export / deletion requests.
 - **KYC is not enforced on bookings yet** (the API design calls for KYC level "basic").
 - Without Redis, rate limits and OTP throttles are per process. Set `REDIS_URL` before running more than one API replica.
+
+## Finance and booking policy decisions (approved by the owner)
+- Commission applies to the rental amount only (not delivery). TCS and TDS apply to rental + delivery before GST; TCS only when the owner has a GSTIN.
+- Rates live in `commission_rules` and `tax_rules` (effective-dated). The 5% no-PAN TDS rate is a **placeholder pending CA verification**.
+- Settlement hold: `BOOKING_SETTLEMENT_HOLD` (default 72h).
+- Undecided policy values default to 0 = rule disabled: `BOOKING_NO_SHOW_GRACE`, `BOOKING_OVERDUE_FEE_BPS_PER_DAY`, `BOOKING_TURNAROUND_BUFFER`, `BOOKING_CANCEL_PENALTY_BPS`.
+- Payouts use a sandbox gateway only; live transfers stay disabled until reconciliation is tested and signed off.

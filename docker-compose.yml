@@ -1,4 +1,6 @@
 # EQUIPRENT local development stack.
+# !! LOCAL ONLY. This runs APP_ENV=development (OTP codes are returned in API
+# !! responses). NEVER deploy this file; use docker-compose.prod.yml.
 #
 #   docker compose up -d                          # PostgreSQL + PostGIS only (run Go/Flutter natively)
 #   docker compose --profile redis up -d          # + Redis (set REDIS_URL in .env)
@@ -32,7 +34,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-equiprent_dev_password}
       POSTGRES_DB: ${POSTGRES_DB:-equiprent}
     ports:
-      - "${POSTGRES_PORT:-5434}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5434}:5432"
     volumes:
       # PostgreSQL 18 images keep data under /var/lib/postgresql/<major>/.
       - pgdata:/var/lib/postgresql
@@ -49,7 +51,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

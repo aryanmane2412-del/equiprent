@@ -33,7 +33,13 @@ jobs:
           cache-dependency-path: backend/go.sum
       - run: go build ./...
       - run: go vet ./...
-      - run: go test ./...
+      - name: Unit + integration tests (database-backed tests must RUN, not skip)
+        run: |
+          set -o pipefail
+          go test -count=1 -p 1 -timeout 20m -v ./... 2>&1 | tee test.log | grep -E '^(--- FAIL|FAIL|ok|panic)' || true
+          if grep -q '^--- FAIL\|^FAIL\|^panic:' test.log; then echo 'tests failed'; exit 1; fi
+          skipped=$(grep -c 'TEST_DATABASE_URL not set' test.log || true)
+          if [ "$skipped" -gt 0 ]; then echo "::error::$skipped integration tests were skipped (TEST_DATABASE_URL missing)"; exit 1; fi
 
   frontend:
     runs-on: ubuntu-latest
@@ -49,7 +55,7 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: flutter analyze
-      - run: flutter test
+      - run: flutter test --coverage
 
   security:
     runs-on: ubuntu-latest
