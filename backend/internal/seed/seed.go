@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"strings"
 
+	"github.com/equiprent/backend/internal/modules/auth"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -338,7 +339,8 @@ func (s *seeder) account(a Account, kind, org string) (*session, bool, error) {
 	login := s.call(http.MethodPost, "/auth/login", "", "", map[string]any{"identifier": a.Phone, "password": Password}, "")
 	created := false
 	if login.code != http.StatusOK {
-		body := map[string]any{"full_name": a.Name, "email": a.Email, "phone": a.Phone, "password": Password, "account_type": kind, "accept_terms": true}
+		body := map[string]any{"full_name": a.Name, "email": a.Email, "phone": a.Phone, "password": Password, "account_type": kind, "accept_terms": true,
+			"inspection_policy_version": auth.EquipmentInspectionPolicyVersion, "accept_inspection_policy": true}
 		if org != "" {
 			body["organization_name"] = org
 		}
