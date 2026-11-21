@@ -115,7 +115,7 @@ func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool, store cache.St
 	}
 	verifySvc := verification.NewService(verification.NewRepository(pool, tx), tx, uploadSvc, crypt, payouts,
 		verification.Options{URLTTL: cfg.Storage.URLTTL, AvatarURLTTL: cfg.Storage.AvatarURLTTL})
-	var authLimit = limiter.Middleware(ratelimit.Rule{Name: "auth", Limit: cfg.RateLimit.AuthPerMinute, Window: time.Minute}, ratelimit.ByIP)
+	var authLimit = limiter.Middleware(ratelimit.Rule{Name: "auth", Limit: cfg.RateLimit.AuthPerMinute, Window: time.Minute, FailClosed: cfg.Env.IsProduction()}, ratelimit.ByIP)
 	if !cfg.RateLimit.Enabled {
 		authLimit = nil
 	}

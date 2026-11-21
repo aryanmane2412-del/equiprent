@@ -14,7 +14,8 @@
     <application
         android:label="EQUIPRENT"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false">
         <meta-data android:name="com.google.android.geo.API_KEY" android:value="${googleMapsApiKey}"/>
         <activity
             android:name=".MainActivity"

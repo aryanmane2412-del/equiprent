@@ -79,12 +79,16 @@ func NewRouter(d Deps) *gin.Engine {
 	r.RedirectTrailingSlash = false
 	// nil means "trust no proxy": ClientIP() uses the socket address unless
 	// HTTP_TRUSTED_PROXIES lists the load balancer ranges.
+	if d.Config.Env.IsProduction() && len(d.Config.HTTP.TrustedProxies) == 0 {
+		d.Logger.Warn("HTTP_TRUSTED_PROXIES is empty in production: behind a load balancer every client shares one IP and per-IP rate limits will hit all users together")
+	}
 	if err := r.SetTrustedProxies(d.Config.HTTP.TrustedProxies); err != nil {
 		d.Logger.Warn("invalid HTTP_TRUSTED_PROXIES, trusting none", "error", err)
 		_ = r.SetTrustedProxies(nil)
 	}
 
 	r.Use(
+		securityHeaders(d.Config.Env == config.EnvStaging || d.Config.Env.IsProduction()),
 		requestIDMiddleware(),
 		recoveryMiddleware(d.Logger),
 		loggingMiddleware(d.Logger, PathLiveness, PathReadiness),

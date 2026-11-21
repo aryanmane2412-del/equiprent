@@ -20,6 +20,10 @@ type Rule struct {
 	Name   string
 	Limit  int
 	Window time.Duration
+	// FailClosed rejects requests when the store is unavailable. Use it for
+	// credential endpoints, where an outage must not lift the brute-force
+	// and SMS-cost protection.
+	FailClosed bool
 }
 
 // Result describes one decision.
@@ -50,6 +54,10 @@ func (l *Limiter) Allow(ctx context.Context, rule Rule, key string) Result {
 	bucket := "rl:" + rule.Name + ":" + key + ":" + strconv.FormatInt(window, 10)
 	n, ttl, err := l.store.Incr(ctx, bucket, rule.Window)
 	if err != nil {
+		if rule.FailClosed {
+			l.log.ErrorContext(ctx, "rate limiter unavailable, rejecting request", "rule", rule.Name, "error", err)
+			return Result{Allowed: false, Limit: rule.Limit, RetryAfter: 30 * time.Second}
+		}
 		l.log.WarnContext(ctx, "rate limiter unavailable, allowing request", "rule", rule.Name, "error", err)
 		return Result{Allowed: true, Limit: rule.Limit, Remaining: rule.Limit}
 	}

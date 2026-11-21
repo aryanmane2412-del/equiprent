@@ -1,0 +1,13 @@
+# Caddy obtains and renews HTTPS certificates automatically.
+{$APP_DOMAIN} {
+	encode gzip
+	reverse_proxy web:80
+}
+
+{$API_DOMAIN} {
+	encode gzip
+	# Public API only. /docs and /readyz detail stay unreachable from outside.
+	@blocked path /docs* /readyz
+	respond @blocked 404
+	reverse_proxy api:8080
+}

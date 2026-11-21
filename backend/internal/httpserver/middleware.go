@@ -135,7 +135,7 @@ var (
 	}, ", ")
 	corsAllowHeaders = strings.Join([]string{
 		"Authorization", "Content-Type", "Accept", "Accept-Language", "Idempotency-Key", "If-Match",
-		HeaderRequestID, "X-Org-Id", "X-Role", "X-App-Version", "X-Platform",
+		HeaderRequestID, "X-Org-Id", "X-App-Version", "X-Platform",
 	}, ", ")
 	corsExposeHeaders = strings.Join([]string{HeaderRequestID, HeaderAPIVersion, "Retry-After", "ETag",
 		"RateLimit-Limit", "RateLimit-Remaining", "Idempotency-Replayed"}, ", ")
