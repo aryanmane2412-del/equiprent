@@ -27,3 +27,13 @@ Not set up yet. This folder will hold staging and production deployment config. 
 - [ ] `HTTP_TRUSTED_PROXIES` set to the load balancer ranges
 - [ ] Image built with `--build-arg VERSION=<tag> --build-arg COMMIT=<sha>`
 - [ ] Log retention ≥ 180 days in India (CERT-In)
+
+### Owner payouts (read before launch)
+
+- No live payout gateway is integrated. The only one simulates transfers, so the worker
+  **does not run `payouts.run` / `payouts.reconcile` when real payment keys are set or in
+  production**. Settlements are still calculated and become `eligible`; pay owners manually
+  (bank transfer) and record it until a live gateway is built and its reconciliation tested.
+- With real keys, `PUT /verification/owner/bank-account` answers 503 ("not enabled yet"):
+  owners cannot complete the "payout bank account" verification step. Either integrate the
+  provider's fund-account validation or add a manual admin verification before onboarding owners.

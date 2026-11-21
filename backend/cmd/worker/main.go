@@ -58,10 +58,21 @@ func run() error {
 	jobs = append(jobs,
 		worker.Job{Name: "settlements.create", Interval: 5 * time.Minute, Timeout: 2 * time.Minute, Run: func(c context.Context) error { _, err := st.CreateSettlements(c, 100); return err }},
 		worker.Job{Name: "settlements.release", Interval: 5 * time.Minute, Run: st.ReleaseDue},
-		// Sandbox gateway only: live transfers stay disabled until reconciliation is tested.
-		worker.Job{Name: "payouts.run", Interval: 15 * time.Minute, Timeout: 5 * time.Minute, Run: func(c context.Context) error { return st.RunPayouts(c, 200) }},
-		worker.Job{Name: "payouts.reconcile", Interval: time.Hour, Timeout: 5 * time.Minute, Run: func(c context.Context) error { return st.Reconcile(c, 200) }},
 	)
+	// The only payout gateway that exists SIMULATES transfers (no money moves).
+	// Running it where real payment keys are configured would mark owners as
+	// paid, and post "Owner payout" to the ledger, for money that never left.
+	// So the payout jobs run only in sandbox mode, never in production; with
+	// real keys settlements stay "eligible" until a live gateway is integrated
+	// and reconciliation is tested (docs/BACKEND.md), and owners are paid manually.
+	if settlements.SimulatedPayoutsAllowed(cfg.Payments.Sandbox(), cfg.Env.IsProduction()) {
+		jobs = append(jobs,
+			worker.Job{Name: "payouts.run", Interval: 15 * time.Minute, Timeout: 5 * time.Minute, Run: func(c context.Context) error { return st.RunPayouts(c, 200) }},
+			worker.Job{Name: "payouts.reconcile", Interval: time.Hour, Timeout: 5 * time.Minute, Run: func(c context.Context) error { return st.Reconcile(c, 200) }},
+		)
+	} else {
+		log.Warn("automatic owner payouts are OFF: no live payout gateway is integrated. Settlements accumulate as eligible and must be paid out manually")
+	}
 	jobs = append(jobs, worker.Job{
 		Name: "heartbeat", Interval: cfg.Worker.HeartbeatInterval,
 		Run: func(ctx context.Context) error {
