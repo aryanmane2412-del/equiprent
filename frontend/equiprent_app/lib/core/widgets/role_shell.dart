@@ -1,3 +1,6 @@
+import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -12,6 +15,20 @@ import '../theme/app_tokens.dart';
 import 'brand_logo.dart';
 import 'media.dart';
 import 'overlays.dart';
+
+/// The sections of a role that are not bottom tabs on phones. The account menu lists them there.
+class RoleNavScope extends InheritedWidget {
+  const RoleNavScope({super.key, required this.others, required super.child});
+
+  final List<RoleDestination> others;
+
+  static RoleNavScope? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<RoleNavScope>();
+
+  @override
+  bool updateShouldNotify(RoleNavScope oldWidget) =>
+      !listEquals(others, oldWidget.others);
+}
 
 /// Role-specific navigation frame:
 /// - compact (phones): bottom NavigationBar; > 5 destinations → 4 + "More"
@@ -54,6 +71,9 @@ class RoleShell extends ConsumerWidget {
     final child = ScaffoldMessenger(child: this.child);
 
     if (size.isCompact) {
+      final tabs = destinations.where((d) => d.phoneOrder != null).toList()
+        ..sort((a, b) => a.phoneOrder!.compareTo(b.phoneOrder!));
+      if (tabs.isNotEmpty) return _phoneTabs(context, tabs, child);
       final overflow = destinations.length > _maxBottomItems;
       final visible = overflow
           ? destinations.take(_maxBottomItems - 1).toList()
@@ -110,6 +130,72 @@ class RoleShell extends ConsumerWidget {
           const VerticalDivider(width: 1),
           Expanded(child: child),
         ],
+      ),
+    );
+  }
+
+  /// Phones: exactly the role's designed tabs. Every other section is in the account menu.
+  Widget _phoneTabs(
+    BuildContext context,
+    List<RoleDestination> tabs,
+    Widget child,
+  ) {
+    final path = GoRouterState.of(context).uri.path;
+    var selected = -1;
+    var bestLength = -1;
+    for (var i = 0; i < tabs.length; i++) {
+      final len = tabs[i].matchLength(path);
+      if (len > bestLength) {
+        bestLength = len;
+        selected = i;
+      }
+    }
+    final others = destinations.where((d) => d.phoneOrder == null).toList();
+    // On a section that is not a tab (e.g. Settings) no tab is current.
+    final otherBest = others.fold<int>(
+      -1,
+      (best, d) => math.max(best, d.matchLength(path)),
+    );
+    if (otherBest > bestLength) selected = -1;
+
+    final theme = Theme.of(context);
+    Widget bar = NavigationBar(
+      selectedIndex: math.max(0, selected),
+      onDestinationSelected: (i) => context.go(tabs[i].path),
+      destinations: [
+        for (final d in tabs)
+          NavigationDestination(
+            key: Key('tab-${d.path}'),
+            icon: Icon(d.phoneIcon ?? d.icon),
+            label: localizeRoleLabel(context, d.phoneLabel ?? d.label),
+            tooltip: localizeRoleLabel(context, d.phoneLabel ?? d.label),
+          ),
+      ],
+    );
+    if (selected < 0) {
+      bar = NavigationBarTheme(
+        data: theme.navigationBarTheme.copyWith(
+          indicatorColor: Colors.transparent,
+          iconTheme: const WidgetStatePropertyAll(
+            IconThemeData(color: AppColors.slate500),
+          ),
+          labelTextStyle: WidgetStatePropertyAll(
+            theme.textTheme.labelMedium?.copyWith(color: AppColors.slate500),
+          ),
+        ),
+        child: bar,
+      );
+    }
+    return RoleNavScope(
+      others: others,
+      child: Scaffold(
+        body: child,
+        bottomNavigationBar: DecoratedBox(
+          decoration: const BoxDecoration(
+            border: Border(top: BorderSide(color: AppColors.border)),
+          ),
+          child: bar,
+        ),
       ),
     );
   }
@@ -239,7 +325,10 @@ class _SideNav extends ConsumerWidget {
                             ),
                           ),
                           Text(
-                            user?.orgs[role] ?? user?.email ?? user?.phone ?? '',
+                            user?.orgs[role] ??
+                                user?.email ??
+                                user?.phone ??
+                                '',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: theme.textTheme.bodySmall?.copyWith(

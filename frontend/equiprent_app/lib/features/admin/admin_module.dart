@@ -8,6 +8,7 @@ import '../notifications/notifications_page.dart';
 import '../chat/chat_pages.dart';
 import 'presentation/admin_analytics_page.dart';
 import 'presentation/admin_bookings_page.dart';
+import 'presentation/admin_disputes_page.dart';
 import 'presentation/admin_finance_pages.dart';
 import 'presentation/admin_overview_page.dart';
 import 'presentation/admin_users_page.dart';
@@ -18,6 +19,7 @@ import '../verification/presentation/admin_verification_pages.dart';
 
 abstract final class AdminRoutes {
   static const overview = '/admin';
+  static const disputes = '/admin/disputes';
   static const owners = '/admin/owners';
   static const users = '/admin/users';
   static const equipment = '/admin/equipment';
@@ -36,6 +38,9 @@ final adminModule = RoleModule(
     RoleDestination(
       path: AdminRoutes.overview,
       label: 'Overview',
+      phoneOrder: 0,
+      phoneLabel: 'Overview',
+      phoneIcon: AppIcons.dashboard,
       icon: AppIcons.dashboard,
       builder: (_) => const AdminOverviewPage(),
     ),
@@ -48,8 +53,18 @@ final adminModule = RoleModule(
     RoleDestination(
       path: AdminRoutes.users,
       label: 'Users',
+      phoneOrder: 2,
+      phoneLabel: 'Users',
+      phoneIcon: AppIcons.users,
       icon: AppIcons.users,
       builder: (_) => const AdminUsersPage(),
+    ),
+    RoleDestination(
+      path: AdminRoutes.disputes,
+      label: 'Disputes',
+      icon: AppIcons.disputes,
+      phoneOrder: 3,
+      builder: (_) => const AdminDisputesPage(),
     ),
     RoleDestination(
       path: AdminRoutes.owners,
@@ -72,6 +87,9 @@ final adminModule = RoleModule(
     RoleDestination(
       path: '/admin/verifications',
       label: 'Driver verification',
+      phoneOrder: 1,
+      phoneLabel: 'Approvals',
+      phoneIcon: AppIcons.shield,
       icon: AppIcons.operator,
       builder: (_) => const VerificationQueuePage(role: 'operator'),
     ),

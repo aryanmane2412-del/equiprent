@@ -14,6 +14,9 @@ class RoleDestination {
     required this.icon,
     required this.builder,
     this.alsoMatches = const [],
+    this.phoneLabel,
+    this.phoneIcon,
+    this.phoneOrder,
   });
 
   final String path;
@@ -25,11 +28,21 @@ class RoleDestination {
   /// the navigation highlights the right item.
   final List<String> alsoMatches;
 
+  /// When [phoneOrder] is set this destination is one of the bottom tabs on phones (the design shows
+  /// four), in that order, with [phoneLabel] and [phoneIcon] when given. Destinations without it are
+  /// still in the side navigation on wider screens, and on phones they are listed in the account
+  /// (avatar) menu, so nothing becomes unreachable.
+  final int? phoneOrder;
+  final String? phoneLabel;
+  final IconData? phoneIcon;
+
   /// Length of the longest prefix of [location] owned by this tab, or -1.
   int matchLength(String location) {
     var best = -1;
     for (final p in [path, ...alsoMatches]) {
-      if ((location == p || location.startsWith('$p/')) && p.length > best) best = p.length;
+      if ((location == p || location.startsWith('$p/')) && p.length > best) {
+        best = p.length;
+      }
     }
     return best;
   }
@@ -40,7 +53,11 @@ class RoleDestination {
 /// them all.
 @immutable
 class RoleModule {
-  const RoleModule({required this.role, required this.destinations, this.extraRoutes = const []});
+  const RoleModule({
+    required this.role,
+    required this.destinations,
+    this.extraRoutes = const [],
+  });
 
   final UserRole role;
   final List<RoleDestination> destinations;
@@ -51,12 +68,14 @@ class RoleModule {
 
   ShellRoute toShellRoute() {
     return ShellRoute(
-      builder: (context, state, child) => RoleShell(role: role, destinations: destinations, child: child),
+      builder: (context, state, child) =>
+          RoleShell(role: role, destinations: destinations, child: child),
       routes: [
         for (final d in destinations)
           GoRoute(
             path: d.path,
-            pageBuilder: (context, state) => NoTransitionPage(key: state.pageKey, child: d.builder(context)),
+            pageBuilder: (context, state) =>
+                NoTransitionPage(key: state.pageKey, child: d.builder(context)),
           ),
         ...extraRoutes,
       ],

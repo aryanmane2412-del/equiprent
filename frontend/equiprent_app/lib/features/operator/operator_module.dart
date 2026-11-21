@@ -13,6 +13,8 @@ import 'presentation/operator_payment_page.dart';
 /// Operator routes. Jobs are addressed by their booking id.
 abstract final class OperatorRoutes {
   static const dashboard = '/operator';
+  static const route = '/operator/route';
+  static const safety = '/operator/safety';
   static const assignments = '/operator/assignments';
   static const history = '/operator/history';
   static const verification = '/operator/verification';
@@ -31,8 +33,25 @@ final operatorModule = RoleModule(
     RoleDestination(
       path: OperatorRoutes.dashboard,
       label: 'Today',
+      phoneOrder: 0,
+      phoneLabel: 'Jobs',
+      phoneIcon: AppIcons.fleet,
       icon: AppIcons.home,
       builder: (_) => const OperatorTodayPage(),
+    ),
+    RoleDestination(
+      path: OperatorRoutes.route,
+      label: 'Route',
+      icon: AppIcons.navigation,
+      phoneOrder: 1,
+      builder: (_) => const OperatorRoutePage(),
+    ),
+    RoleDestination(
+      path: OperatorRoutes.safety,
+      label: 'Safety',
+      icon: AppIcons.handover,
+      phoneOrder: 2,
+      builder: (_) => const OperatorSafetyPage(),
     ),
     RoleDestination(
       path: OperatorRoutes.assignments,
@@ -44,6 +63,9 @@ final operatorModule = RoleModule(
     RoleDestination(
       path: OperatorRoutes.history,
       label: 'History',
+      phoneOrder: 3,
+      phoneLabel: 'Log',
+      phoneIcon: AppIcons.history,
       icon: AppIcons.history,
       builder: (_) => const OperatorJobsPage(scope: 'history'),
     ),

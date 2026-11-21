@@ -1,5 +1,6 @@
 import 'package:equiprent_app/core/localization/locale_controller.dart';
 import 'package:equiprent_app/core/session/user_role.dart';
+import 'package:equiprent_app/core/widgets/layout.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -22,14 +23,17 @@ void main() {
     final container = await pumpApp(tester);
 
     await goTo(tester, container, '/owner', role: UserRole.owner);
-    await tapOn(tester, find.text('More'));
-    await tapOn(tester, find.text('Settings').last);
+    await tapOn(tester, find.byType(AccountMenuButton));
+    await tapOn(tester, find.byKey(const Key('menu-section-/owner/settings')));
     expect(find.text('Settings'), findsOneWidget);
     expect(find.byKey(const ValueKey('app-language-selector')), findsOneWidget);
 
     await goTo(tester, container, '/operator', role: UserRole.operator);
-    await tapOn(tester, find.text('More'));
-    await tapOn(tester, find.text('Settings').last);
+    await tapOn(tester, find.byType(AccountMenuButton));
+    await tapOn(
+      tester,
+      find.byKey(const Key('menu-section-/operator/settings')),
+    );
     expect(find.text('Settings'), findsOneWidget);
     expect(find.byKey(const ValueKey('app-language-selector')), findsOneWidget);
   });

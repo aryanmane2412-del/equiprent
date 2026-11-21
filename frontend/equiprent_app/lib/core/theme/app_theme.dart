@@ -8,6 +8,18 @@ abstract final class AppTypography {
   static const fontFamily = 'InstrumentSans';
   static const headingFamily = 'Alatsi';
 
+  /// Monospace for specs, dates and amounts.
+  static const monoFamily = 'SourceCodePro';
+
+  /// Instrument Sans has no rupee sign (U+20B9). Inter, bundled with the app, does, so any glyph the
+  /// main font lacks is taken from it: prices never render as an empty box, even where the platform
+  /// has no fallback font (the web build does not download fonts).
+  static const fallbackFamilies = ['Inter'];
+
+  /// [base] in the monospace family (tabular, for dates, specs and amounts).
+  static TextStyle mono(TextStyle? base) => (base ?? const TextStyle())
+      .copyWith(fontFamily: monoFamily, fontFamilyFallback: fallbackFamilies);
+
   static const _tight = -0.4;
 
   static const textTheme = TextTheme(
@@ -131,12 +143,14 @@ abstract final class AppTheme {
     const scheme = colorScheme;
     final base = AppTypography.textTheme.apply(
       fontFamily: AppTypography.fontFamily,
+      fontFamilyFallback: AppTypography.fallbackFamilies,
       bodyColor: AppColors.textPrimary,
       displayColor: AppColors.textPrimary,
     );
     // Mockup type system: Alatsi for display/headline, Instrument Sans else.
     TextStyle? head(TextStyle? t) => t?.copyWith(
       fontFamily: AppTypography.headingFamily,
+      fontFamilyFallback: AppTypography.fallbackFamilies,
       fontWeight: FontWeight.w400,
     );
     final text = base.copyWith(
@@ -161,6 +175,7 @@ abstract final class AppTheme {
       useMaterial3: true,
       colorScheme: scheme,
       fontFamily: AppTypography.fontFamily,
+      fontFamilyFallback: AppTypography.fallbackFamilies,
       textTheme: text,
       scaffoldBackgroundColor: AppColors.canvas,
       canvasColor: AppColors.canvas,

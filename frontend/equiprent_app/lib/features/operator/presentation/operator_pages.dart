@@ -942,15 +942,22 @@ class _NextStep extends StatelessWidget {
 
 /// Route to the site: opens turn-by-turn directions; arrival is confirmed here.
 class OperatorNavigationPage extends ConsumerWidget {
-  const OperatorNavigationPage({super.key, required this.bookingId});
+  const OperatorNavigationPage({
+    super.key,
+    required this.bookingId,
+    this.topLevel = false,
+  });
   final String bookingId;
+
+  /// True when shown as the Route tab (rather than pushed from a job).
+  final bool topLevel;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final job = ref.watch(myJobProvider(bookingId));
     return AppPage(
       title: 'Navigate to site',
-      topLevel: false,
+      topLevel: topLevel,
       actions: [
         IconButton(
           key: const Key('operator-refresh'),
@@ -1368,4 +1375,131 @@ class _IssueFormState extends ConsumerState<IssueForm> {
       ],
     ),
   );
+}
+
+/// The Route tab: the way to the site of the job the driver is on. With no open job there is nothing
+/// to route to.
+class OperatorRoutePage extends ConsumerWidget {
+  const OperatorRoutePage({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final jobs = ref.watch(myJobsProvider('current'));
+    return jobs.when(
+      data: (list) => list.isEmpty
+          ? AppPage(
+              title: 'Route',
+              body: PageBody(
+                children: const [
+                  EmptyState(
+                    icon: AppIcons.navigation,
+                    title: 'No active route',
+                    message:
+                        'When you have a job, the way to its site shows here.',
+                  ),
+                ],
+              ),
+            )
+          : OperatorNavigationPage(
+              bookingId: list.first.bookingId,
+              topLevel: true,
+            ),
+      loading: () => const AppPage(title: 'Route', body: LoadingView()),
+      error: (e, _) => AppPage(
+        title: 'Route',
+        body: ErrorState(
+          message: describeError(e),
+          onRetry: () => ref.invalidate(myJobsProvider('current')),
+        ),
+      ),
+    );
+  }
+}
+
+/// The Safety tab: the handover (pre-trip) and return checklists of every open job.
+class OperatorSafetyPage extends ConsumerWidget {
+  const OperatorSafetyPage({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final jobs = ref.watch(myJobsProvider('current'));
+    final theme = Theme.of(context);
+    return AppPage(
+      title: 'Safety',
+      subtitle: 'Pre-trip and return inspections',
+      actions: [
+        IconButton(
+          key: const Key('operator-refresh'),
+          tooltip: 'Refresh',
+          icon: const Icon(AppIcons.refresh),
+          onPressed: () => ref.invalidate(myJobsProvider('current')),
+        ),
+      ],
+      body: AsyncBody(
+        value: jobs,
+        onRetry: () => ref.invalidate(myJobsProvider('current')),
+        builder: (list) => list.isEmpty
+            ? const EmptyState(
+                icon: AppIcons.handover,
+                title: 'No inspections due',
+                message:
+                    'Checklists for your open jobs appear here, so you can run them before you unload.',
+              )
+            : PageBody(
+                children: [
+                  for (final j in list)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                      child: AppCard(
+                        key: Key('safety-job-${j.bookingId}'),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              j.equipmentTitle,
+                              style: theme.textTheme.titleMedium,
+                            ),
+                            Text(
+                              '${j.reference} · ${Fmt.dateRange(j.start, j.end)}',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: AppColors.slate600,
+                              ),
+                            ),
+                            const Gap(AppSpacing.md),
+                            AppButton(
+                              key: Key('safety-handover-${j.bookingId}'),
+                              label: 'Pre-trip (handover) checklist',
+                              icon: AppIcons.handover,
+                              variant: AppButtonVariant.accent,
+                              expand: true,
+                              onPressed: () => context.push(
+                                OperatorJobRoutes.checklist(
+                                  j.bookingId,
+                                  'handover',
+                                ),
+                              ),
+                            ),
+                            const Gap(AppSpacing.sm),
+                            AppButton(
+                              key: Key('safety-return-${j.bookingId}'),
+                              label: 'Return checklist',
+                              icon: AppIcons.checkCircle,
+                              variant: AppButtonVariant.secondary,
+                              expand: true,
+                              onPressed: () => context.push(
+                                OperatorJobRoutes.checklist(
+                                  j.bookingId,
+                                  'return',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+      ),
+    );
+  }
 }

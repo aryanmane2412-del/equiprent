@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../../core/widgets/widgets.dart'
     hide Review, ChatMessage, AppNotification;
+import '../../../core/theme/app_theme.dart' show AppTypography;
+import '../../bookings/data/booking_api.dart' show customerSitesProvider;
 import '../../comms/data/comms_api.dart';
 import '../../comms/data/comms_models.dart';
 import '../../comms/presentation/comms_widgets.dart' show BookingStatusBadge;
@@ -48,6 +50,8 @@ class CustomerHomePage extends ConsumerWidget {
             'Rent Construction Vehicles',
             style: theme.textTheme.headlineLarge,
           ),
+          const Gap(AppSpacing.xs),
+          const _DeliveringTo(),
           const Gap(AppSpacing.sm),
           _SearchBar(onSearch: () => context.go(CustomerRoutes.search)),
           const Gap(AppSpacing.lg),
@@ -134,6 +138,70 @@ class CustomerHomePage extends ConsumerWidget {
         ],
       ),
     );
+  }
+}
+
+/// "Delivering to: Site name · City" from the customer's saved delivery site; a prompt to add one when there is
+/// none. Nothing is shown while it loads or if it cannot be loaded.
+class _DeliveringTo extends ConsumerWidget {
+  const _DeliveringTo();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    return ref
+        .watch(customerSitesProvider)
+        .maybeWhen(
+          data: (sites) {
+            final site = sites.isEmpty ? null : sites.first;
+            return InkWell(
+              key: const Key('delivering-to'),
+              borderRadius: BorderRadius.circular(AppRadius.sm),
+              onTap: () => context.go(CustomerRoutes.profile),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+                child: Row(
+                  children: [
+                    const Icon(
+                      AppIcons.siteMarker,
+                      size: 16,
+                      color: AppColors.orange700,
+                    ),
+                    const Gap(AppSpacing.xs),
+                    Flexible(
+                      child: Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(
+                              text: site == null ? '' : 'Delivering to: ',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: AppColors.slate600,
+                              ),
+                            ),
+                            TextSpan(
+                              text: site == null
+                                  ? 'Add a delivery site'
+                                  : '${site.label} · ${site.city}',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: site == null
+                                    ? AppColors.navy700
+                                    : AppColors.textPrimary,
+                              ),
+                            ),
+                          ],
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+          orElse: () => const SizedBox.shrink(),
+        );
   }
 }
 
@@ -236,11 +304,40 @@ class _FeaturedEquipmentCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        listing.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleMedium,
+                      ),
+                    ),
+                    const Gap(AppSpacing.sm),
+                    Text(
+                      listing.priceLabel ?? 'Price on request',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: AppColors.navy700,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+                const Gap(AppSpacing.xs),
                 Text(
-                  listing.title,
+                  [
+                    listing.categoryName,
+                    if (listing.year != null) '${listing.year}',
+                    if (listing.place.isNotEmpty) listing.place,
+                  ].where((x) => x.isNotEmpty).join(' • '),
+                  key: Key('specs-${listing.id}'),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.titleSmall,
+                  style: AppTypography.mono(
+                    theme.textTheme.bodySmall,
+                  ).copyWith(color: AppColors.slate600),
                 ),
                 const Gap(AppSpacing.xs),
                 Row(
@@ -257,33 +354,7 @@ class _FeaturedEquipmentCard extends StatelessWidget {
                           : '${listing.rating!.toStringAsFixed(1)} (${listing.ratingCount})',
                       style: theme.textTheme.bodySmall,
                     ),
-                    const Spacer(),
-                    if (listing.place.isNotEmpty) ...[
-                      const Icon(
-                        AppIcons.siteMarker,
-                        size: 14,
-                        color: AppColors.slate500,
-                      ),
-                      const Gap(4),
-                      Flexible(
-                        child: Text(
-                          listing.place,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: AppColors.slate500,
-                          ),
-                        ),
-                      ),
-                    ],
                   ],
-                ),
-                const Gap(AppSpacing.xs),
-                Text(
-                  listing.priceLabel ?? 'Price on request',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: AppColors.navy700,
-                  ),
                 ),
                 const Gap(AppSpacing.sm),
                 Row(

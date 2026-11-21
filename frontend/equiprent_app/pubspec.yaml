@@ -96,6 +96,15 @@ flutter:
           weight: 600
         - asset: assets/fonts/InstrumentSans.ttf
           weight: 700
+    # Monospace for specs, dates and amounts (the design's Source Code Pro). Has the rupee sign.
+    - family: SourceCodePro
+      fonts:
+        - asset: assets/fonts/SourceCodePro.ttf
+          weight: 400
+        - asset: assets/fonts/SourceCodePro.ttf
+          weight: 500
+        - asset: assets/fonts/SourceCodePro.ttf
+          weight: 600
     - family: Inter
       fonts:
         - asset: assets/fonts/Inter-400.ttf

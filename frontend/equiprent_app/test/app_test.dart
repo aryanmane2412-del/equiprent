@@ -115,13 +115,18 @@ void main() {
     await goTo(tester, c, '/customer', role: UserRole.customer);
 
     for (final (label, path, pageMarker) in const [
-      ('Home', '/customer', 'Recently listed'),
-      ('Search', '/customer/search', 'Find equipment'),
-      ('Bookings', '/customer/bookings', 'My bookings'),
-      ('Chat', '/customer/chat', 'Messages'),
-      ('Profile', '/customer/profile', 'Profile & verification'),
+      ('Browse', '/customer', 'Recently listed'),
+      ('My Rentals', '/customer/bookings', 'My bookings'),
+      ('Track', '/customer/track', 'Follow your machines'),
+      ('Account', '/customer/profile', 'Profile & verification'),
     ]) {
-      await tapOn(tester, find.text(label));
+      await tapOn(
+        tester,
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text(label),
+        ),
+      );
       expect(
         c.read(routerProvider).routeInformationProvider.value.uri.path,
         path,
@@ -135,16 +140,54 @@ void main() {
     }
   });
 
-  testWidgets('phones collapse extra sections into a More sheet', (
-    tester,
-  ) async {
-    final c = await pumpApp(tester);
-    await goTo(tester, c, '/owner', role: UserRole.owner);
-    expect(find.byType(NavigationBar), findsOneWidget);
-    await tapOn(tester, find.text('More'));
-    await tapOn(tester, find.text('Maintenance').last);
-    expect(find.text('Scheduled & in progress'), findsOneWidget);
-  });
+  testWidgets(
+    'phones show four tabs per role; other sections are in the account menu',
+    (tester) async {
+      const tabs = {
+        UserRole.customer: ['Browse', 'My Rentals', 'Track', 'Account'],
+        UserRole.operator: ['Jobs', 'Route', 'Safety', 'Log'],
+        UserRole.owner: ['My Fleet', 'Requests', 'Earnings', 'Service'],
+        UserRole.admin: ['Overview', 'Approvals', 'Users', 'Disputes'],
+      };
+      final c = await pumpApp(tester);
+      for (final e in tabs.entries) {
+        await goTo(
+          tester,
+          c,
+          '/${e.key == UserRole.operator ? 'operator' : e.key.name}',
+          role: e.key,
+        );
+        final bar = find.byType(NavigationBar);
+        expect(bar, findsOneWidget, reason: e.key.name);
+        expect(
+          find.descendant(
+            of: bar,
+            matching: find.byType(NavigationDestination),
+          ),
+          findsNWidgets(4),
+          reason: e.key.name,
+        );
+        for (final l in e.value) {
+          expect(
+            find.descendant(of: bar, matching: find.text(l)),
+            findsOneWidget,
+            reason: '${e.key.name} $l',
+          );
+        }
+      }
+      // Owner sections that are not tabs stay reachable from the avatar menu.
+      await goTo(tester, c, '/owner', role: UserRole.owner);
+      await tapOn(tester, find.byType(AccountMenuButton));
+      await tapOn(
+        tester,
+        find.byKey(const Key('menu-section-/owner/calendar')),
+      );
+      expect(
+        c.read(routerProvider).routeInformationProvider.value.uri.path,
+        '/owner/calendar',
+      );
+    },
+  );
 
   testWidgets('admin finance screens expose no mutation controls', (
     tester,

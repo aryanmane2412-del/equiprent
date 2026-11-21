@@ -15,6 +15,7 @@ import '../localization/app_strings.dart';
 import 'buttons.dart';
 import 'feedback.dart';
 import 'media.dart';
+import 'role_shell.dart' show RoleNavScope;
 
 /// Standard page: app bar (title, actions, notifications + account on
 /// top-level pages) and body. Detail pages get an automatic back button.
@@ -389,6 +390,8 @@ class AccountMenuButton extends ConsumerWidget {
             context.go('/account');
           case 'signout':
             ref.read(authControllerProvider.notifier).logout();
+          default:
+            if (v.startsWith('go:')) context.go(v.substring(3));
         }
       },
       itemBuilder: (context) => [
@@ -416,6 +419,18 @@ class AccountMenuButton extends ConsumerWidget {
           ),
         ),
         const PopupMenuDivider(),
+        // Phones: the sections that are not bottom tabs.
+        for (final d in RoleNavScope.maybeOf(context)?.others ?? const [])
+          PopupMenuItem<String>(
+            key: Key('menu-section-${d.path}'),
+            value: 'go:${d.path}',
+            child: _MenuRow(
+              icon: d.icon,
+              label: localizeRoleLabel(context, d.label),
+            ),
+          ),
+        if ((RoleNavScope.maybeOf(context)?.others ?? const []).isNotEmpty)
+          const PopupMenuDivider(),
         PopupMenuItem(
           value: 'account',
           child: _MenuRow(icon: AppIcons.shield, label: 'Account & security'),
@@ -447,7 +462,7 @@ class _MenuRow extends StatelessWidget {
     children: [
       Icon(icon, size: 18, color: AppColors.slate600),
       const SizedBox(width: AppSpacing.ms),
-      Text(label),
+      Flexible(child: Text(label, overflow: TextOverflow.ellipsis)),
     ],
   );
 }

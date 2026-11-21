@@ -421,51 +421,63 @@ class _AdminOverviewTop extends ConsumerWidget {
         ],
         if (open.isNotEmpty) ...[
           const SectionHeader(title: 'Active disputes'),
-          for (final d in open.take(3))
-            Padding(
-              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-              child: AppCard(
-                key: Key('dispute-${d.id}'),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            d.summary.isEmpty ? d.category : d.summary,
-                            style: theme.textTheme.titleMedium,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          Text(
-                            [
-                              d.category,
-                              if (d.claimedPaise > 0)
-                                '${Fmt.inr(d.claimedPaise / 100)} contested',
-                              if (d.openedAt != null)
-                                'opened ${Fmt.shortDate(d.openedAt!)}',
-                            ].where((x) => x.isNotEmpty).join(' · '),
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: AppColors.slate600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Gap(AppSpacing.sm),
-                    StatusBadge(
-                      label: d.status == 'under_review' ? 'In review' : 'Open',
-                      tone: AppTone.danger,
-                    ),
-                  ],
-                ),
-              ),
-            ),
+          for (final d in open.take(3)) AdminDisputeTile(dispute: d),
           const Gap(AppSpacing.md),
         ],
         const SectionHeader(title: 'Platform monitor'),
       ],
+    );
+  }
+}
+
+/// One open dispute (read-only): what it is about, how much is contested and when it was opened.
+class AdminDisputeTile extends StatelessWidget {
+  const AdminDisputeTile({super.key, required this.dispute});
+  final AdminDisputeRow dispute;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final d = dispute;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+      child: AppCard(
+        key: Key('dispute-${d.id}'),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    d.summary.isEmpty ? d.category : d.summary,
+                    style: theme.textTheme.titleMedium,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    [
+                      d.category,
+                      if (d.claimedPaise > 0)
+                        '${Fmt.inr(d.claimedPaise / 100)} contested',
+                      if (d.openedAt != null)
+                        'opened ${Fmt.shortDate(d.openedAt!)}',
+                    ].where((x) => x.isNotEmpty).join(' · '),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: AppColors.slate600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Gap(AppSpacing.sm),
+            StatusBadge(
+              label: d.status == 'under_review' ? 'In review' : 'Open',
+              tone: AppTone.danger,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

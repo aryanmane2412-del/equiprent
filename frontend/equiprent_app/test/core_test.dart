@@ -136,11 +136,11 @@ void main() {
     test('each role has its own navigation under its prefix', () {
       expect(roleModules.map((m) => m.role).toSet(), UserRole.values.toSet());
       final expected = {
-        UserRole.customer: 5,
+        UserRole.customer: 6,
         UserRole.owner: 8,
-        UserRole.operator: 6, // Includes verification and settings.
+        UserRole.operator: 8, // Includes verification and settings.
         UserRole.fleetManager: 7,
-        UserRole.admin: 12, // Read-only monitoring, reports and settings.
+        UserRole.admin: 13, // Read-only monitoring, reports and settings.
       };
       for (final m in roleModules) {
         expect(m.destinations.length, expected[m.role], reason: m.role.name);

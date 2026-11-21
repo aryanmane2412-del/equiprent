@@ -1,3 +1,4 @@
+import 'presentation/customer_track_page.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/routing/role_module.dart';
@@ -23,6 +24,7 @@ import 'presentation/customer_profile_page.dart';
 /// Customer routes. Tabs: Home, Search, Bookings, Chat, Profile.
 abstract final class CustomerRoutes {
   static const home = '/customer';
+  static const trackTab = '/customer/track';
   static const search = '/customer/search';
   static const bookings = '/customer/bookings';
   static const chat = '/customer/chat';
@@ -47,6 +49,9 @@ final customerModule = RoleModule(
     RoleDestination(
       path: CustomerRoutes.home,
       label: 'Home',
+      phoneOrder: 0,
+      phoneLabel: 'Browse',
+      phoneIcon: AppIcons.search,
       icon: AppIcons.home,
       builder: (_) => const CustomerHomePage(),
     ),
@@ -66,8 +71,18 @@ final customerModule = RoleModule(
     RoleDestination(
       path: CustomerRoutes.bookings,
       label: 'Bookings',
+      phoneOrder: 1,
+      phoneLabel: 'My Rentals',
+      phoneIcon: AppIcons.bookings,
       icon: AppIcons.bookings,
       builder: (_) => const BookingListPage(side: BookingSide.customer),
+    ),
+    RoleDestination(
+      path: CustomerRoutes.trackTab,
+      label: 'Track',
+      icon: AppIcons.fleet,
+      phoneOrder: 2,
+      builder: (_) => const CustomerTrackPage(),
     ),
     RoleDestination(
       path: CustomerRoutes.chat,
@@ -78,6 +93,9 @@ final customerModule = RoleModule(
     RoleDestination(
       path: CustomerRoutes.profile,
       label: 'Profile',
+      phoneOrder: 3,
+      phoneLabel: 'Account',
+      phoneIcon: AppIcons.profile,
       icon: AppIcons.profile,
       builder: (_) => const CustomerProfilePage(),
       alsoMatches: const [CustomerRoutes.payments],

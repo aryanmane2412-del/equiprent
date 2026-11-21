@@ -5,8 +5,7 @@ import '../../core/session/user_role.dart';
 import '../../core/theme/app_icons.dart';
 import '../settings/app_settings_page.dart';
 import '../agreements/agreement_page.dart';
-import '../fleet_manager/presentation/fleet_pages.dart'
-    show FleetOperatorsPage;
+import '../fleet_manager/presentation/fleet_pages.dart' show FleetOperatorsPage;
 import '../documents/document_pages.dart';
 import '../documents/invoice_detail_page.dart';
 import '../bookings/booking_pages.dart';
@@ -31,6 +30,9 @@ final ownerModule = RoleModule(
     RoleDestination(
       path: OwnerRoutes.dashboard,
       label: 'Dashboard',
+      phoneOrder: 0,
+      phoneLabel: 'My Fleet',
+      phoneIcon: AppIcons.fleet,
       icon: AppIcons.dashboard,
       builder: (_) => const OwnerDashboardPage(),
     ),
@@ -43,6 +45,9 @@ final ownerModule = RoleModule(
     RoleDestination(
       path: OwnerRoutes.bookings,
       label: 'Bookings',
+      phoneOrder: 1,
+      phoneLabel: 'Requests',
+      phoneIcon: AppIcons.bookings,
       icon: AppIcons.bookings,
       builder: (_) => const BookingListPage(side: BookingSide.owner),
     ),
@@ -55,12 +60,18 @@ final ownerModule = RoleModule(
     RoleDestination(
       path: OwnerRoutes.earnings,
       label: 'Earnings',
+      phoneOrder: 2,
+      phoneLabel: 'Earnings',
+      phoneIcon: AppIcons.earnings,
       icon: AppIcons.earnings,
       builder: (_) => const OwnerEarningsPage(),
     ),
     RoleDestination(
       path: OwnerRoutes.maintenance,
       label: 'Maintenance',
+      phoneOrder: 3,
+      phoneLabel: 'Service',
+      phoneIcon: AppIcons.maintenance,
       icon: AppIcons.maintenance,
       builder: (_) => const MaintenancePage(),
     ),
