@@ -134,50 +134,6 @@ class OperatorTodayPage extends ConsumerWidget {
         },
         child: PageBody(
           children: [
-            Container(
-              key: const Key('operator-status-banner'),
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.md,
-                vertical: AppSpacing.ms,
-              ),
-              decoration: BoxDecoration(
-                color: const Color(0xFFD3F3D9),
-                borderRadius: BorderRadius.circular(AppRadius.md),
-              ),
-              child: Row(
-                children: [
-                  const Icon(
-                    AppIcons.verified,
-                    color: Color(0xFF0B461C),
-                  ),
-                  const Gap(AppSpacing.sm),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Driver panel',
-                          style: TextStyle(
-                            color: Color(0xFF0B461C),
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        Text(
-                          current.maybeWhen(
-                            data: (j) => j.isEmpty
-                                ? 'No jobs assigned right now'
-                                : '${j.length} ${j.length == 1 ? 'job' : 'jobs'} assigned',
-                            orElse: () => 'Loading your jobs…',
-                          ),
-                          style: const TextStyle(color: Color(0xFF0B461C)),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Gap(AppSpacing.md),
             const SectionHeader(title: 'Open jobs'),
             AsyncBody(
               value: current,
