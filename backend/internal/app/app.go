@@ -197,6 +197,7 @@ func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool, store cache.St
 		reviews.NewHandler(reviews.NewService(reviews.NewRepository(pool), bookingSvc, tx)),
 		disputes.NewHandler(disputeSvc),
 		admin.NewHandler(admin.NewService(admin.NewRepository(pool), tx, equipmentSvc, bookingSvc)),
+		admin.NewPayoutsHandler(pool),
 		uploads.NewHandler(uploadSvc, cfg.Storage.MaxUploadBytes),
 		verification.NewHandler(verifySvc),
 	}

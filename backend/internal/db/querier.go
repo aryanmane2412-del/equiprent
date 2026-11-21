@@ -38,14 +38,24 @@ type Querier interface {
 	AdminBookingTrend(ctx context.Context, arg AdminBookingTrendParams) ([]AdminBookingTrendRow, error)
 	// One row per owner organisation (never per user/role row); equipment counted from the equipment table.
 	AdminEquipmentOwners(ctx context.Context, arg AdminEquipmentOwnersParams) ([]AdminEquipmentOwnersRow, error)
+	// Finance visibility into owner payouts: what needs a person.
+	AdminListPayouts(ctx context.Context, arg AdminListPayoutsParams) ([]AdminListPayoutsRow, error)
 	AdminListReviews(ctx context.Context, arg AdminListReviewsParams) ([]AdminListReviewsRow, error)
 	AdminListUsers(ctx context.Context, arg AdminListUsersParams) ([]AdminListUsersRow, error)
+	// The latest mismatch per payout between our books and the gateway (including a payout the bank
+	// reversed after it was marked paid).
+	AdminPayoutMismatches(ctx context.Context, resultLimit int32) ([]AdminPayoutMismatchesRow, error)
 	AdminReadOnlyBookings(ctx context.Context, arg AdminReadOnlyBookingsParams) ([]AdminReadOnlyBookingsRow, error)
 	AdminReadOnlyDashboard(ctx context.Context, arg AdminReadOnlyDashboardParams) (AdminReadOnlyDashboardRow, error)
 	AdminReadOnlyEquipment(ctx context.Context, arg AdminReadOnlyEquipmentParams) ([]AdminReadOnlyEquipmentRow, error)
 	AdminReadOnlyPayments(ctx context.Context, arg AdminReadOnlyPaymentsParams) ([]AdminReadOnlyPaymentsRow, error)
 	AdminReadOnlyUsers(ctx context.Context, arg AdminReadOnlyUsersParams) ([]AdminReadOnlyUsersRow, error)
+	AdminRecentFailedPayouts(ctx context.Context, resultLimit int32) ([]AdminRecentFailedPayoutsRow, error)
 	AdminRevenueSeries(ctx context.Context, arg AdminRevenueSeriesParams) ([]AdminRevenueSeriesRow, error)
+	// Sent to the gateway (or recorded) but still not finished long after.
+	AdminStuckPayouts(ctx context.Context, arg AdminStuckPayoutsParams) ([]AdminStuckPayoutsRow, error)
+	// Owners with money waiting that cannot be paid because they have no verified payout account.
+	AdminUnpayableOwners(ctx context.Context, resultLimit int32) ([]AdminUnpayableOwnersRow, error)
 	// ---- agreements ------------------------------------------------------------------------------
 	// Everything the agreement names, read once when it is first generated.
 	AgreementContext(ctx context.Context, bookingID uuid.UUID) (AgreementContextRow, error)
@@ -679,6 +689,8 @@ type Querier interface {
 	PayoutByIdempotencyKey(ctx context.Context, arg PayoutByIdempotencyKeyParams) (uuid.UUID, error)
 	PayoutSettlements(ctx context.Context, payoutID uuid.UUID) ([]PayoutSettlementsRow, error)
 	PayoutTransferState(ctx context.Context, payoutID uuid.UUID) (PayoutTransferStateRow, error)
+	// Payouts never confirmed against the gateway, plus payouts paid in the last 14 days that were not
+	// checked in the last 6 hours: a bank can reverse a payout days after it was paid.
 	PayoutsToReconcile(ctx context.Context, lim int32) ([]PayoutsToReconcileRow, error)
 	// Payouts sent to the gateway whose final bank outcome is not known yet.
 	PayoutsToSettle(ctx context.Context, lim int32) ([]PayoutsToSettleRow, error)

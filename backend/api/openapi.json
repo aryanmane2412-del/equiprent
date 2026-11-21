@@ -492,6 +492,59 @@
           "data"
         ]
       },
+      "admin.PayoutAttention": {
+        "type": "object",
+        "properties": {
+          "failed_recently": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/db.AdminRecentFailedPayoutsRow"
+            }
+          },
+          "mismatches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/db.AdminPayoutMismatchesRow"
+            }
+          },
+          "needs_attention": {
+            "type": "boolean"
+          },
+          "stuck": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/db.AdminStuckPayoutsRow"
+            }
+          },
+          "unpayable_owners": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/db.AdminUnpayableOwnersRow"
+            }
+          }
+        },
+        "required": [
+          "needs_attention",
+          "stuck",
+          "failed_recently",
+          "mismatches",
+          "unpayable_owners"
+        ]
+      },
+      "admin.PayoutPage": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/db.AdminListPayoutsRow"
+            }
+          }
+        },
+        "required": [
+          "data"
+        ]
+      },
       "admin.ReadOnlyDashboard": {
         "type": "object",
         "properties": {
@@ -4646,6 +4699,110 @@
           "equipment_count"
         ]
       },
+      "db.AdminListPayoutsRow": {
+        "type": "object",
+        "properties": {
+          "amount_paise": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "failure_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "gateway_transfer_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "owner_name": {
+            "type": "string"
+          },
+          "owner_org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paid_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "owner_org_id",
+          "owner_name",
+          "amount_paise",
+          "status",
+          "created_at"
+        ]
+      },
+      "db.AdminPayoutMismatchesRow": {
+        "type": "object",
+        "properties": {
+          "amount_paise": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "gateway_paise": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "gateway_status": {
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "our_status": {
+            "type": "string"
+          },
+          "owner_name": {
+            "type": "string"
+          },
+          "owner_org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payout_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "payout_id",
+          "owner_org_id",
+          "owner_name",
+          "amount_paise",
+          "our_status",
+          "gateway_status",
+          "gateway_paise",
+          "checked_at"
+        ]
+      },
       "db.AdminReadOnlyBookingsRow": {
         "type": "object",
         "properties": {
@@ -4763,6 +4920,140 @@
           "status",
           "created_at",
           "roles"
+        ]
+      },
+      "db.AdminRecentFailedPayoutsRow": {
+        "type": "object",
+        "properties": {
+          "amount_paise": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "failure_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "gateway_transfer_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "owner_name": {
+            "type": "string"
+          },
+          "owner_org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paid_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "owner_org_id",
+          "owner_name",
+          "amount_paise",
+          "status",
+          "created_at"
+        ]
+      },
+      "db.AdminStuckPayoutsRow": {
+        "type": "object",
+        "properties": {
+          "amount_paise": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "failure_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "gateway_transfer_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "owner_name": {
+            "type": "string"
+          },
+          "owner_org_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paid_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "owner_org_id",
+          "owner_name",
+          "amount_paise",
+          "status",
+          "created_at"
+        ]
+      },
+      "db.AdminUnpayableOwnersRow": {
+        "type": "object",
+        "properties": {
+          "eligible_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "eligible_paise": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "owner_name": {
+            "type": "string"
+          },
+          "owner_org_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "owner_org_id",
+          "owner_name",
+          "eligible_count",
+          "eligible_paise"
         ]
       },
       "db.OwnerMonthlyEarningsRow": {
@@ -15640,6 +15931,114 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/tracking.AccessList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem403"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Problem500"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/payouts": {
+      "get": {
+        "summary": "Owner payouts, newest first (read-only)",
+        "operationId": "getApiV1AdminPayouts",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "processing",
+                "paid",
+                "failed",
+                "reversed"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/admin.PayoutPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem403"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Problem500"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/payouts/attention": {
+      "get": {
+        "summary": "Payouts that need a person: stuck, failed, mismatched with the gateway, or unpayable owners",
+        "operationId": "getApiV1AdminPayoutsAttention",
+        "tags": [
+          "admin"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/admin.PayoutAttention"
                 }
               }
             }

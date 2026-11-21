@@ -2319,7 +2319,10 @@ func (q *Queries) PayoutTransferState(ctx context.Context, payoutID uuid.UUID) (
 
 const payoutsToReconcile = `-- name: PayoutsToReconcile :many
 SELECT id, owner_org_id, amount_paise, status::text AS status FROM payouts
-WHERE status IN ('processing', 'paid') AND NOT EXISTS (SELECT 1 FROM payout_reconciliations r WHERE r.payout_id = payouts.id AND r.matches)
+WHERE status IN ('processing', 'paid') AND (
+        NOT EXISTS (SELECT 1 FROM payout_reconciliations r WHERE r.payout_id = payouts.id AND r.matches)
+     OR (status = 'paid' AND paid_at > now() - interval '14 days'
+         AND COALESCE((SELECT max(r.checked_at) FROM payout_reconciliations r WHERE r.payout_id = payouts.id), '-infinity'::timestamptz) < now() - interval '6 hours'))
 ORDER BY created_at LIMIT $1
 `
 
@@ -2330,6 +2333,8 @@ type PayoutsToReconcileRow struct {
 	Status      string    `json:"status"`
 }
 
+// Payouts never confirmed against the gateway, plus payouts paid in the last 14 days that were not
+// checked in the last 6 hours: a bank can reverse a payout days after it was paid.
 func (q *Queries) PayoutsToReconcile(ctx context.Context, lim int32) ([]PayoutsToReconcileRow, error) {
 	rows, err := q.db.Query(ctx, payoutsToReconcile, lim)
 	if err != nil {

@@ -52,15 +52,31 @@ Safety rules built in (all covered by `backend/tests/payout_live_test.go`):
 1. Create a RazorpayX account, complete its KYC, and note the **RazorpayX account number**.
 2. Set `PAYMENT_KEY_ID` / `PAYMENT_KEY_SECRET` to **`rzp_test_`** keys, `PAYOUT_PROVIDER=razorpayx`,
    `RAZORPAYX_ACCOUNT_NUMBER=<test account number>`.
-3. In test mode: add a bank account as an owner, check it verifies; complete a booking, let the worker
-   run, and confirm in the RazorpayX dashboard that the payout appears and the settlement turns `paid`.
-   Also test a failing account and an insufficient balance. **This integration was tested against a mock
-   of the RazorpayX API, not the real service, so this step is required.**
+3. **Run the test-mode checker** (this is the step that tests the real RazorpayX API; the unit tests only
+   used a mock). From `backend/`, with the settings from step 2 in `../.env`:
+
+   ```
+   go run ./cmd/payoutcheck -name "Account Holder" -account <test account no> -ifsc <IFSC>
+   ```
+
+   It refuses live keys, never prints a key or a full account number, and checks: the bank account
+   verifies, a payout is accepted, **sending the same idempotency key twice returns the same payout**
+   (the guarantee that prevents paying an owner twice), the payout reaches a final status with the right
+   amount, and an unaffordable payout is refused as a definite rejection. If any line says FAIL, do not
+   go live; send the output to be fixed.
+   Then do one real flow by hand: an owner adds a bank account in the app, a booking completes, the
+   worker runs, and the payout appears in the RazorpayX dashboard and the settlement turns `paid`.
 4. Switch to `rzp_live_` keys and fund the RazorpayX balance. Money collected from customers does not
    move into the RazorpayX balance by itself: set up the transfer (or top up) so payouts do not fail with
    "insufficient balance".
-5. Watch the worker logs for `ALERT:` lines (rejected payouts, amount mismatches, over-cap settlements)
-   and the reconciliation mismatches that finance reviews.
+5. Finance can see problems without reading logs. Admin finance/ops roles can call
+   `GET /admin/payouts` (all payouts, `?status=` filter) and `GET /admin/payouts/attention`, which lists:
+   payouts **stuck** in `processing` for over 2 hours, payouts that **failed or were reversed** in the last
+   7 days, **mismatches** between our books and the gateway (including a payout the bank reversed after it
+   was marked paid), and **owners who cannot be paid** because they have no verified payout account.
+   Also watch the worker logs for `ALERT:` lines. Check `attention` daily at first.
 
-Not yet covered: RazorpayX webhooks (the worker polls payout status every 2 minutes instead), and
-`reversed` payouts after a bank return (they show up as a reconciliation mismatch for a person to resolve).
+Not built (by choice): RazorpayX webhooks (the worker polls payout status every 2 minutes instead), and
+automatic handling of a payout the bank reverses after paying. Paid payouts are re-checked against the
+gateway for 14 days, so a reversal is detected and appears under `mismatches` in `/admin/payouts/attention`;
+a person decides what to do (re-pay, recover, or adjust the ledger).
