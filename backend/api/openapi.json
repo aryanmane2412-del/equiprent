@@ -495,6 +495,9 @@
       "admin.PayoutAttention": {
         "type": "object",
         "properties": {
+          "automatic_payouts": {
+            "type": "boolean"
+          },
           "failed_recently": {
             "type": "array",
             "items": {
@@ -524,6 +527,7 @@
           }
         },
         "required": [
+          "automatic_payouts",
           "needs_attention",
           "stuck",
           "failed_recently",

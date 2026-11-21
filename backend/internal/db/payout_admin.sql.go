@@ -238,11 +238,18 @@ const adminUnpayableOwners = `-- name: AdminUnpayableOwners :many
 SELECT s.owner_org_id, o.display_name AS owner_name, count(*)::int AS eligible_count, COALESCE(sum(s.net_payable_paise), 0)::bigint AS eligible_paise
 FROM settlements s JOIN organizations o ON o.id = s.owner_org_id
 WHERE s.status = 'eligible' AND s.net_payable_paise > 0
-  AND NOT EXISTS (SELECT 1 FROM payout_linked_accounts l WHERE l.owner_org_id = s.owner_org_id AND l.activation_status = 'activated')
+  AND NOT EXISTS (SELECT 1 FROM payout_linked_accounts l WHERE l.owner_org_id = s.owner_org_id AND l.activation_status = 'activated'
+                  AND l.provider = $1::text AND l.mode = $2::text)
 GROUP BY s.owner_org_id, o.display_name
 ORDER BY eligible_paise DESC
-LIMIT $1
+LIMIT $3
 `
+
+type AdminUnpayableOwnersParams struct {
+	Provider    string `json:"provider"`
+	Mode        string `json:"mode"`
+	ResultLimit int32  `json:"result_limit"`
+}
 
 type AdminUnpayableOwnersRow struct {
 	OwnerOrgID    uuid.UUID `json:"owner_org_id"`
@@ -252,8 +259,8 @@ type AdminUnpayableOwnersRow struct {
 }
 
 // Owners with money waiting that cannot be paid because they have no verified payout account.
-func (q *Queries) AdminUnpayableOwners(ctx context.Context, resultLimit int32) ([]AdminUnpayableOwnersRow, error) {
-	rows, err := q.db.Query(ctx, adminUnpayableOwners, resultLimit)
+func (q *Queries) AdminUnpayableOwners(ctx context.Context, arg AdminUnpayableOwnersParams) ([]AdminUnpayableOwnersRow, error) {
+	rows, err := q.db.Query(ctx, adminUnpayableOwners, arg.Provider, arg.Mode, arg.ResultLimit)
 	if err != nil {
 		return nil, err
 	}

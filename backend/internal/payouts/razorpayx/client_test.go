@@ -2,6 +2,8 @@ package razorpayx
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -19,18 +21,19 @@ import (
 
 // fakeAPI mimics the parts of RazorpayX the client uses.
 type fakeAPI struct {
-	mu          sync.Mutex
-	srv         *httptest.Server
-	calls       []string
-	lastPayout  map[string]any
-	lastHeaders http.Header
-	fundStatus  int // non-zero: fail POST /fund_accounts with this status
-	valStatuses []string
-	valResult   map[string]any
-	payoutCode  int
-	payoutBody  string
-	statusBody  string
-	authOK      bool
+	mu            sync.Mutex
+	srv           *httptest.Server
+	calls         []string
+	lastPayout    map[string]any
+	lastHeaders   http.Header
+	fundStatus    int // non-zero: fail POST /fund_accounts with this status
+	valCreateFail int // non-zero: fail POST /fund_accounts/validations with this status
+	valStatuses   []string
+	valResult     map[string]any
+	payoutCode    int
+	payoutBody    string
+	statusBody    string
+	authOK        bool
 }
 
 func newFake(t *testing.T) (*fakeAPI, *Client) {
@@ -73,6 +76,10 @@ func (f *fakeAPI) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(200, map[string]any{"id": "fa_1"})
 	case r.Method == http.MethodPost && r.URL.Path == "/fund_accounts/validations":
+		if f.valCreateFail != 0 {
+			reply(f.valCreateFail, map[string]any{"error": map[string]any{"code": "BAD_REQUEST_ERROR", "description": "Your account does not have enough balance"}})
+			return
+		}
 		reply(200, map[string]any{"id": "fav_1", "status": "created"})
 	case r.Method == http.MethodGet && r.URL.Path == "/fund_accounts/validations/fav_1":
 		st := f.valStatuses[0]
@@ -262,5 +269,72 @@ func TestClientIsAPayoutProviderAndGateway(t *testing.T) {
 	}
 	if New("k", "s", "a", "IMPS").Sandbox() {
 		t.Error("the real client is never a sandbox")
+	}
+}
+
+// An empty RazorpayX balance stops the penny drop from starting. That is the platform's problem:
+// the owner must not be told their bank details were refused.
+func TestPlatformProblemsAreNotBlamedOnTheOwner(t *testing.T) {
+	f, c := newFake(t)
+	f.valCreateFail = 400
+	res, err := c.VerifyAccount(context.Background(), account)
+	if !errors.Is(err, apperror.ErrServiceUnavailable) || res.Verified || res.Reason != "" {
+		t.Fatalf("a balance problem must be 'unavailable', not a refusal of the owner's account: res=%+v err=%v", res, err)
+	}
+}
+
+// A slow bank must not make every retry start (and pay for) a new penny drop.
+func TestSlowBankIsResumedNotRestarted(t *testing.T) {
+	f, c := newFake(t)
+	f.valStatuses = []string{"created"} // the bank has not answered within the wait
+	if _, err := c.VerifyAccount(context.Background(), account); !errors.Is(err, apperror.ErrServiceUnavailable) {
+		t.Fatalf("first try: %v", err)
+	}
+	before := len(f.calls)
+	f.mu.Lock()
+	f.valStatuses = []string{"completed"} // the bank answers while the owner waits
+	f.mu.Unlock()
+	res, err := c.VerifyAccount(context.Background(), account)
+	if err != nil || !res.Verified || res.Reference != "fa_1" {
+		t.Fatalf("the retry must finish the same verification: res=%+v err=%v", res, err)
+	}
+	for _, call := range f.calls[before:] {
+		if call == "POST /contacts" || call == "POST /fund_accounts" || call == "POST /fund_accounts/validations" {
+			t.Fatalf("the retry started a new verification (%s): calls after the first try = %v", call, f.calls[before:])
+		}
+	}
+	// A different account is not mixed up with the pending one.
+	other := account
+	other.AccountNumber = "999999999999"
+	f.mu.Lock()
+	f.valStatuses = []string{"completed"}
+	f.mu.Unlock()
+	if _, err := c.VerifyAccount(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The whole call must fit inside the app's 20 s request timeout.
+func TestVerificationFitsTheAppTimeout(t *testing.T) {
+	c := New("rzp_test_k", "s", "a", "IMPS")
+	if total := c.PollFor + 4*time.Second; total >= 20*time.Second {
+		t.Fatalf("worst case %s does not fit the app's 20 s receive timeout", total)
+	}
+}
+
+// The runbook tells an engineer to look a payout up by this reference id, so it must be exactly
+// the first 32 hex characters of the SHA-256 of the idempotency key, in both the header and the body.
+func TestPayoutReferenceMatchesTheRunbook(t *testing.T) {
+	f, c := newFake(t)
+	sum := sha256.Sum256([]byte("key-abc"))
+	want := hex.EncodeToString(sum[:])[:32]
+	if _, err := c.Transfer(context.Background(), "key-abc", "fa_1", 100); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.lastHeaders.Get("X-Payout-Idempotency"); got != want {
+		t.Errorf("idempotency header = %q, want %q", got, want)
+	}
+	if got := f.lastPayout["reference_id"]; got != want {
+		t.Errorf("reference_id = %v, want %q", got, want)
 	}
 }

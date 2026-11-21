@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/equiprent/backend/internal/apperror"
@@ -38,17 +39,30 @@ type Client struct {
 	BaseURL       string
 	HTTP          *http.Client
 
-	// PollEvery / PollFor bound how long VerifyAccount waits for the bank.
+	// PollEvery / PollFor bound how long VerifyAccount waits for the bank. The whole call must
+	// finish inside the app's 20 s request timeout, so a slow bank is resumed on the next try.
 	PollEvery time.Duration
 	PollFor   time.Duration
+
+	mu      sync.Mutex
+	pending map[string]pendingValidation
 }
+
+// pendingValidation is a penny drop the bank has not answered yet, remembered so that
+// the owner's retry resumes it instead of starting (and paying for) a new one.
+type pendingValidation struct {
+	fundID, valID string
+	expires       time.Time
+}
+
+const pendingTTL = 10 * time.Minute
 
 // New builds a client for the live API.
 func New(keyID, keySecret, accountNumber, mode string) *Client {
 	return &Client{
 		KeyID: keyID, KeySecret: keySecret, AccountNumber: accountNumber, Mode: mode,
 		BaseURL: "https://api.razorpay.com/v1", HTTP: &http.Client{Timeout: 15 * time.Second},
-		PollEvery: time.Second, PollFor: 20 * time.Second,
+		PollEvery: time.Second, PollFor: 12 * time.Second,
 	}
 }
 
@@ -133,15 +147,17 @@ func definite(err error) bool {
 // ---- bank account verification ---------------------------------------------------------------
 
 // VerifyAccount creates a contact and a bank fund account, runs the penny-drop
-// validation and waits (bounded) for the bank's answer.
+// validation and waits (bounded) for the bank's answer. If the bank is slower than
+// the wait, the validation is remembered and the owner's retry resumes it.
 func (c *Client) VerifyAccount(ctx context.Context, a verification.PayoutAccount) (verification.PayoutResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.PollFor+10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, c.PollFor+4*time.Second)
 	defer cancel()
 	unavailable := func(err error) (verification.PayoutResult, error) {
 		return verification.PayoutResult{}, apperror.ErrServiceUnavailable.
 			WithDetail("bank account verification is temporarily unavailable; please try again shortly").Wrap(err)
 	}
-	// A 4xx is the provider telling us the details are wrong: the owner can fix them.
+	// A 400 on the owner's own details is theirs to fix. Anything else (bad credentials, an empty
+	// RazorpayX balance, rate limits) is OUR problem and must not be blamed on the owner.
 	userFault := func(err error) (verification.PayoutResult, bool) {
 		var ae *apiError
 		if errors.As(err, &ae) && definite(err) && ae.Status != http.StatusUnauthorized && ae.Status != http.StatusForbidden && ae.Status != http.StatusNotFound {
@@ -150,74 +166,87 @@ func (c *Client) VerifyAccount(ctx context.Context, a verification.PayoutAccount
 		return verification.PayoutResult{}, false
 	}
 
-	var contact struct {
-		ID string `json:"id"`
-	}
-	raw, err := c.call(ctx, http.MethodPost, "/contacts", map[string]any{
-		"name": a.HolderName, "type": "vendor", "reference_id": "owner-" + randomHex(8),
-	}, nil)
-	if err != nil {
-		if r, ok := userFault(err); ok {
-			return r, nil
+	key := verifyKey(a)
+	fundID, valID := c.takePending(key)
+	if valID == "" {
+		var contact struct {
+			ID string `json:"id"`
 		}
-		return unavailable(err)
-	}
-	if json.Unmarshal(raw, &contact) != nil || contact.ID == "" {
-		return unavailable(errors.New("unexpected contact response"))
-	}
+		raw, err := c.call(ctx, http.MethodPost, "/contacts", map[string]any{
+			"name": a.HolderName, "type": "vendor", "reference_id": "owner-" + randomHex(8),
+		}, nil)
+		if err != nil {
+			if r, ok := userFault(err); ok {
+				return r, nil
+			}
+			return unavailable(err)
+		}
+		if json.Unmarshal(raw, &contact) != nil || contact.ID == "" {
+			return unavailable(errors.New("unexpected contact response"))
+		}
 
-	var fund struct {
-		ID string `json:"id"`
-	}
-	raw, err = c.call(ctx, http.MethodPost, "/fund_accounts", map[string]any{
-		"contact_id": contact.ID, "account_type": "bank_account",
-		"bank_account": map[string]any{"name": a.HolderName, "ifsc": a.IFSC, "account_number": a.AccountNumber},
-	}, nil)
-	if err != nil {
-		if r, ok := userFault(err); ok {
-			return r, nil
+		var fund struct {
+			ID string `json:"id"`
 		}
-		return unavailable(err)
-	}
-	if json.Unmarshal(raw, &fund) != nil || fund.ID == "" {
-		return unavailable(errors.New("unexpected fund account response"))
+		raw, err = c.call(ctx, http.MethodPost, "/fund_accounts", map[string]any{
+			"contact_id": contact.ID, "account_type": "bank_account",
+			"bank_account": map[string]any{"name": a.HolderName, "ifsc": a.IFSC, "account_number": a.AccountNumber},
+		}, nil)
+		if err != nil {
+			if r, ok := userFault(err); ok {
+				return r, nil
+			}
+			return unavailable(err)
+		}
+		if json.Unmarshal(raw, &fund) != nil || fund.ID == "" {
+			return unavailable(errors.New("unexpected fund account response"))
+		}
+		fundID = fund.ID
+
+		var created validation
+		raw, err = c.call(ctx, http.MethodPost, "/fund_accounts/validations", map[string]any{
+			"account_number": c.AccountNumber, "fund_account": map[string]any{"id": fundID},
+			"amount": 100, "currency": "INR", "reference_id": "val-" + randomHex(8),
+			"notes": map[string]any{"purpose": "EQUIPRENT payout account"},
+		}, nil)
+		if err != nil {
+			// The bank details were already accepted above, so a failure to START the check
+			// (typically too little RazorpayX balance for the penny drop) is the platform's, not the owner's.
+			return unavailable(err)
+		}
+		if json.Unmarshal(raw, &created) != nil || created.ID == "" {
+			return unavailable(errors.New("unexpected validation response"))
+		}
+		valID = created.ID
 	}
 
 	var val validation
-	raw, err = c.call(ctx, http.MethodPost, "/fund_accounts/validations", map[string]any{
-		"account_number": c.AccountNumber, "fund_account": map[string]any{"id": fund.ID},
-		"amount": 100, "currency": "INR", "reference_id": "val-" + randomHex(8),
-		"notes": map[string]any{"purpose": "EQUIPRENT payout account"},
-	}, nil)
-	if err != nil {
-		if r, ok := userFault(err); ok {
-			return r, nil
-		}
-		return unavailable(err)
-	}
-	if json.Unmarshal(raw, &val) != nil || val.ID == "" {
-		return unavailable(errors.New("unexpected validation response"))
-	}
-
 	deadline := time.Now().Add(c.PollFor)
-	for val.Status == "created" || val.Status == "" {
-		if time.Now().After(deadline) {
-			return verification.PayoutResult{}, apperror.ErrServiceUnavailable.
-				WithDetail("the bank is still verifying this account; please try again in a minute")
-		}
-		select {
-		case <-ctx.Done():
-			return unavailable(ctx.Err())
-		case <-time.After(c.PollEvery):
-		}
-		raw, err = c.call(ctx, http.MethodGet, "/fund_accounts/validations/"+url.PathEscape(val.ID), nil, nil)
+	for {
+		raw, err := c.call(ctx, http.MethodGet, "/fund_accounts/validations/"+url.PathEscape(valID), nil, nil)
 		if err != nil {
+			c.savePending(key, fundID, valID) // keep it: the retry can pick up where this stopped
 			return unavailable(err)
 		}
 		if json.Unmarshal(raw, &val) != nil {
 			return unavailable(errors.New("unexpected validation response"))
 		}
+		if val.Status != "created" && val.Status != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			c.savePending(key, fundID, valID)
+			return verification.PayoutResult{}, apperror.ErrServiceUnavailable.
+				WithDetail("the bank is still verifying this account; please try again in a minute")
+		}
+		select {
+		case <-ctx.Done():
+			c.savePending(key, fundID, valID)
+			return unavailable(ctx.Err())
+		case <-time.After(c.PollEvery):
+		}
 	}
+	c.dropPending(key)
 
 	res := verification.PayoutResult{Provider: "razorpay", Mode: c.ModeName()}
 	switch {
@@ -226,13 +255,45 @@ func (c *Client) VerifyAccount(ctx context.Context, a verification.PayoutAccount
 			res.Reason = "the account holder name does not match the name the bank holds for this account"
 			return res, nil
 		}
-		res.Verified, res.Reference = true, fund.ID
+		res.Verified, res.Reference = true, fundID
 	case val.Status == "completed":
 		res.Reason = "the bank reports this account as " + firstNonEmpty(val.Results.AccountStatus, "not active")
 	default:
 		res.Reason = firstNonEmpty(val.StatusDetails.Description, "the bank could not validate this account")
 	}
 	return res, nil
+}
+
+// verifyKey identifies one verification attempt by what the owner typed.
+func verifyKey(a verification.PayoutAccount) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(a.HolderName)) + "|" + a.AccountNumber + "|" + strings.ToUpper(a.IFSC)))
+	return hex.EncodeToString(sum[:])
+}
+
+func (c *Client) takePending(key string) (fundID, valID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, ok := c.pending[key]
+	if !ok || time.Now().After(p.expires) {
+		delete(c.pending, key)
+		return "", ""
+	}
+	return p.fundID, p.valID
+}
+
+func (c *Client) savePending(key, fundID, valID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pending == nil {
+		c.pending = map[string]pendingValidation{}
+	}
+	c.pending[key] = pendingValidation{fundID: fundID, valID: valID, expires: time.Now().Add(pendingTTL)}
+}
+
+func (c *Client) dropPending(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.pending, key)
 }
 
 type validation struct {

@@ -44,6 +44,7 @@ import (
 	"github.com/equiprent/backend/internal/modules/payments"
 	"github.com/equiprent/backend/internal/modules/reviews"
 	"github.com/equiprent/backend/internal/modules/search"
+	"github.com/equiprent/backend/internal/modules/settlements"
 	"github.com/equiprent/backend/internal/modules/tracking"
 	"github.com/equiprent/backend/internal/modules/uploads"
 	"github.com/equiprent/backend/internal/modules/users"
@@ -159,6 +160,7 @@ func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool, store cache.St
 		tracking.Options{PolicyVersion: cfg.Tracking.PolicyVersion, AllowSimulated: cfg.Tracking.AllowSimulated,
 			IdleTimeout: cfg.Tracking.IdleTimeout, Origins: wsOrigins(cfg)})
 
+	payoutProvider, payoutMode := settlements.AccountKind(PayoutGateway(cfg))
 	paymentSvc := payments.NewService(payments.NewRepository(pool), bookingSvc, gateway, tx, log)
 	disputeSvc := disputes.NewService(disputes.NewRepository(pool), bookingSvc, tx)
 
@@ -197,7 +199,7 @@ func New(cfg config.Config, log *slog.Logger, pool *pgxpool.Pool, store cache.St
 		reviews.NewHandler(reviews.NewService(reviews.NewRepository(pool), bookingSvc, tx)),
 		disputes.NewHandler(disputeSvc),
 		admin.NewHandler(admin.NewService(admin.NewRepository(pool), tx, equipmentSvc, bookingSvc)),
-		admin.NewPayoutsHandler(pool),
+		admin.NewPayoutsHandler(pool, PayoutGateway(cfg) != nil, payoutProvider, payoutMode),
 		uploads.NewHandler(uploadSvc, cfg.Storage.MaxUploadBytes),
 		verification.NewHandler(verifySvc),
 	}

@@ -28,6 +28,9 @@ type PayoutPage struct {
 
 // PayoutAttention is everything about owner payouts that needs a person.
 type PayoutAttention struct {
+	// AutomaticPayouts says whether the worker pays owners at all. When false, owners are paid
+	// manually and UnpayableOwners is not computed.
+	AutomaticPayouts bool `json:"automatic_payouts"`
 	// NeedsAttention is true when any list below is not empty.
 	NeedsAttention bool `json:"needs_attention"`
 	// Stuck: still "processing" after StuckPayoutAfter.
@@ -37,15 +40,23 @@ type PayoutAttention struct {
 	// Mismatches: our books and the gateway disagree, including a payout the bank
 	// reversed after it was marked paid. A person decides what to do.
 	Mismatches []db.AdminPayoutMismatchesRow `json:"mismatches"`
-	// UnpayableOwners: money is waiting but the owner has no verified payout account.
+	// UnpayableOwners: money is waiting but the owner has no verified payout account for the gateway
+	// in use (after switching from test to live keys, owners must verify their account again).
 	UnpayableOwners []db.AdminUnpayableOwnersRow `json:"unpayable_owners"`
 }
 
 // PayoutsHandler gives finance visibility into owner payouts (read-only).
-type PayoutsHandler struct{ pool *pgxpool.Pool }
+type PayoutsHandler struct {
+	pool           *pgxpool.Pool
+	automatic      bool
+	provider, mode string
+}
 
-// NewPayoutsHandler builds the handler.
-func NewPayoutsHandler(pool *pgxpool.Pool) *PayoutsHandler { return &PayoutsHandler{pool: pool} }
+// NewPayoutsHandler builds the handler. automatic, provider and mode describe the payout gateway the
+// worker uses (settlements.AccountKind); with automatic=false owners are paid manually.
+func NewPayoutsHandler(pool *pgxpool.Pool, automatic bool, provider, mode string) *PayoutsHandler {
+	return &PayoutsHandler{pool: pool, automatic: automatic, provider: provider, mode: mode}
+}
 
 func (h *PayoutsHandler) Name() string { return "admin-payouts" }
 
@@ -97,11 +108,14 @@ func (h *PayoutsHandler) attention(ctx context.Context) (PayoutAttention, error)
 	if err != nil {
 		return PayoutAttention{}, database.MapError(err)
 	}
-	unpayable, err := q.AdminUnpayableOwners(ctx, limit)
-	if err != nil {
-		return PayoutAttention{}, database.MapError(err)
+	var unpayable []db.AdminUnpayableOwnersRow
+	if h.automatic {
+		unpayable, err = q.AdminUnpayableOwners(ctx, db.AdminUnpayableOwnersParams{Provider: h.provider, Mode: h.mode, ResultLimit: limit})
+		if err != nil {
+			return PayoutAttention{}, database.MapError(err)
+		}
 	}
-	out := PayoutAttention{Stuck: stuck, FailedRecently: failed, Mismatches: mismatches, UnpayableOwners: unpayable}
+	out := PayoutAttention{AutomaticPayouts: h.automatic, Stuck: stuck, FailedRecently: failed, Mismatches: mismatches, UnpayableOwners: unpayable}
 	if out.Stuck == nil {
 		out.Stuck = []db.AdminStuckPayoutsRow{}
 	}

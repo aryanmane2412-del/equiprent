@@ -2,6 +2,8 @@ package tests
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -35,6 +37,9 @@ func newPayoutGateway() *payoutGateway {
 }
 
 func (g *payoutGateway) Sandbox() bool { return false }
+
+// ModeName makes the gateway a razorpay "test" gateway, so it may only pay razorpay/test accounts.
+func (g *payoutGateway) ModeName() string { return "test" }
 
 func (g *payoutGateway) Transfer(_ context.Context, key, _ string, paise int64) (string, error) {
 	g.mu.Lock()
@@ -122,6 +127,12 @@ func (f *payoutFixture) ageAccount() {
 	          ALTER TABLE payouts ENABLE TRIGGER payouts_updated_at;`)
 }
 
+// liveAccount turns the owner's payout account into a RazorpayX test-mode account, as verifying
+// with the live provider would. The simulated account the sandbox created is not payable by a live gateway.
+func (f *payoutFixture) liveAccount() {
+	f.e.exec(`UPDATE payout_linked_accounts SET provider = 'razorpay', mode = 'test'`)
+}
+
 func (f *payoutFixture) count(sql string, args ...any) int {
 	f.t.Helper()
 	n, err := strconv.Atoi(f.e.query1(sql, args...))
@@ -158,6 +169,7 @@ func TestVerifiedBankAccountBecomesThePayoutAccount(t *testing.T) {
 func TestLivePayoutIsPaidOnlyWhenTheBankConfirms(t *testing.T) {
 	f := newPayoutFixture(t, 500_000, 700_000)
 	gw := newPayoutGateway()
+	f.liveAccount()
 	svc := f.service(gw, nil)
 
 	if err := svc.RunPayouts(pctx, 50); err != nil {
@@ -205,6 +217,7 @@ func TestLivePayoutIsPaidOnlyWhenTheBankConfirms(t *testing.T) {
 func TestPayoutWithADifferentGatewayAmountIsNotMarkedPaid(t *testing.T) {
 	f := newPayoutFixture(t, 500_000)
 	gw := newPayoutGateway()
+	f.liveAccount()
 	svc := f.service(gw, nil)
 	if err := svc.RunPayouts(pctx, 50); err != nil {
 		t.Fatal(err)
@@ -226,6 +239,7 @@ func TestPayoutWithADifferentGatewayAmountIsNotMarkedPaid(t *testing.T) {
 func TestRejectedAndFailedPayoutsAreFreedForRetry(t *testing.T) {
 	f := newPayoutFixture(t, 500_000)
 	gw := newPayoutGateway()
+	f.liveAccount()
 	svc := f.service(gw, nil)
 
 	gw.failWith = fmt.Errorf("%w: not enough balance", settlements.ErrTransferRejected)
@@ -235,8 +249,16 @@ func TestRejectedAndFailedPayoutsAreFreedForRetry(t *testing.T) {
 	if f.payoutStatuses() != "failed" || f.settlementStatuses() != "eligible" || f.ledgerPayouts() != 0 {
 		t.Fatalf("after a refusal: payouts=%s settlements=%s ledger=%d", f.payoutStatuses(), f.settlementStatuses(), f.ledgerPayouts())
 	}
-	// Next run (balance topped up): the same money is paid.
+	// Retried immediately? No: a persistent problem (an empty balance) must not be hammered every run.
 	gw.failWith = nil
+	if err := svc.RunPayouts(pctx, 50); err != nil {
+		t.Fatal(err)
+	}
+	if f.payoutStatuses() != "failed" || gw.payouts() != 0 {
+		t.Fatalf("a failed attempt must wait out its backoff before the same money is retried: %s", f.payoutStatuses())
+	}
+	// After the backoff (balance topped up): the same money is paid, with a new idempotency key.
+	f.backdatePayouts(1)
 	if err := svc.RunPayouts(pctx, 50); err != nil {
 		t.Fatal(err)
 	}
@@ -258,6 +280,7 @@ func TestRejectedAndFailedPayoutsAreFreedForRetry(t *testing.T) {
 func TestUnknownOutcomeIsNeverDuplicated(t *testing.T) {
 	f := newPayoutFixture(t, 500_000)
 	gw := newPayoutGateway()
+	f.liveAccount()
 	svc := f.service(gw, nil)
 
 	gw.sendThenFail = true // the payout left, but we never heard back
@@ -302,6 +325,7 @@ func TestUnknownOutcomeIsNeverDuplicated(t *testing.T) {
 func TestCooldownAndCap(t *testing.T) {
 	f := newPayoutFixture(t, 300_000, 900_000)
 	gw := newPayoutGateway()
+	f.liveAccount()
 	svc := f.service(gw, func(s *settlements.Service) { s.BankCooldown = 24 * time.Hour; s.MaxPaise = 500_000 })
 
 	if err := svc.RunPayouts(pctx, 50); err != nil {
@@ -339,5 +363,78 @@ func TestSimulatedGatewayGuard(t *testing.T) {
 	}
 	if f.payoutStatuses() != "paid" || f.settlementStatuses() != "paid" || f.ledgerPayouts() != 1 {
 		t.Fatalf("development simulation still completes at once: %s %s %d", f.payoutStatuses(), f.settlementStatuses(), f.ledgerPayouts())
+	}
+}
+
+// A dispute opened while a payout is in flight moves the settlement to on_hold. When the bank then
+// confirms, the money has left: the payout must still complete (it used to roll back and stay
+// "processing" forever).
+func TestDisputeOpenedWhilePayoutIsInFlightStillCompletes(t *testing.T) {
+	f := newPayoutFixture(t, 500_000)
+	gw := newPayoutGateway()
+	f.liveAccount()
+	svc := f.service(gw, nil)
+	if err := svc.RunPayouts(pctx, 50); err != nil {
+		t.Fatal(err)
+	}
+	f.e.exec(`UPDATE settlements SET status = 'on_hold', hold_reason = 'A dispute is open on this booking'`)
+	gw.setAll("processed")
+	if err := svc.SettleProcessing(pctx, 50); err != nil {
+		t.Fatal(err)
+	}
+	if f.payoutStatuses() != "paid" || f.settlementStatuses() != "paid" || f.ledgerPayouts() != 1 {
+		t.Fatalf("money already sent must be recorded as paid: payouts=%s settlements=%s ledger=%d", f.payoutStatuses(), f.settlementStatuses(), f.ledgerPayouts())
+	}
+}
+
+// A live gateway only pays accounts its own provider and mode verified: a simulated account (created
+// in development/staging) is never sent real money, and neither is a test-mode account under live keys.
+func TestGatewayOnlyPaysItsOwnKindOfAccount(t *testing.T) {
+	f := newPayoutFixture(t, 500_000) // the sandbox verified the owner: a simulated account
+	gw := newPayoutGateway()
+	svc := f.service(gw, nil)
+	if err := svc.RunPayouts(pctx, 50); err != nil {
+		t.Fatal(err)
+	}
+	if gw.payouts() != 0 || f.count(`SELECT count(*) FROM payouts`) != 0 {
+		t.Fatal("a simulated payout account must not be sent a live payout")
+	}
+	f.e.exec(`UPDATE payout_linked_accounts SET provider = 'razorpay', mode = 'live'`) // live keys would be mode live; this gateway is test
+	if err := svc.RunPayouts(pctx, 50); err != nil {
+		t.Fatal(err)
+	}
+	if gw.payouts() != 0 {
+		t.Fatal("a live-mode account must not be paid by a test-mode gateway")
+	}
+	f.liveAccount()
+	if err := svc.RunPayouts(pctx, 50); err != nil {
+		t.Fatal(err)
+	}
+	if gw.payouts() != 1 {
+		t.Fatalf("the matching account is paid: %d", gw.payouts())
+	}
+}
+
+// Backoff grows and is capped.
+func TestRetryBackoffGrowsAndIsCapped(t *testing.T) {
+	got := []string{}
+	for _, n := range []int32{1, 2, 3, 4, 5, 9} {
+		got = append(got, settlements.RetryBackoff(n).String())
+	}
+	want := []string{"30m0s", "1h0m0s", "2h0m0s", "4h0m0s", "6h0m0s", "6h0m0s"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("backoff = %v, want %v", got, want)
+		}
+	}
+}
+
+// The runbook's SQL must compute the same reference id the RazorpayX client sends.
+func TestRunbookReferenceSQLMatchesTheClient(t *testing.T) {
+	e := newEnv(t)
+	sum := sha256.Sum256([]byte("key-abc"))
+	want := hex.EncodeToString(sum[:])[:32]
+	if got := e.query1(`SELECT left(encode(sha256(convert_to($1::text, 'UTF8')), 'hex'), 32)`, "key-abc"); got != want {
+		t.Fatalf("runbook SQL gives %s, the client sends %s", got, want)
 	}
 }

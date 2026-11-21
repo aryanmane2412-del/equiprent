@@ -43,7 +43,8 @@ LIMIT @result_limit;
 SELECT s.owner_org_id, o.display_name AS owner_name, count(*)::int AS eligible_count, COALESCE(sum(s.net_payable_paise), 0)::bigint AS eligible_paise
 FROM settlements s JOIN organizations o ON o.id = s.owner_org_id
 WHERE s.status = 'eligible' AND s.net_payable_paise > 0
-  AND NOT EXISTS (SELECT 1 FROM payout_linked_accounts l WHERE l.owner_org_id = s.owner_org_id AND l.activation_status = 'activated')
+  AND NOT EXISTS (SELECT 1 FROM payout_linked_accounts l WHERE l.owner_org_id = s.owner_org_id AND l.activation_status = 'activated'
+                  AND l.provider = @provider::text AND l.mode = @mode::text)
 GROUP BY s.owner_org_id, o.display_name
 ORDER BY eligible_paise DESC
 LIMIT @result_limit;

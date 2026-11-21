@@ -55,7 +55,7 @@ type Querier interface {
 	// Sent to the gateway (or recorded) but still not finished long after.
 	AdminStuckPayouts(ctx context.Context, arg AdminStuckPayoutsParams) ([]AdminStuckPayoutsRow, error)
 	// Owners with money waiting that cannot be paid because they have no verified payout account.
-	AdminUnpayableOwners(ctx context.Context, resultLimit int32) ([]AdminUnpayableOwnersRow, error)
+	AdminUnpayableOwners(ctx context.Context, arg AdminUnpayableOwnersParams) ([]AdminUnpayableOwnersRow, error)
 	// ---- agreements ------------------------------------------------------------------------------
 	// Everything the agreement names, read once when it is first generated.
 	AgreementContext(ctx context.Context, bookingID uuid.UUID) (AgreementContextRow, error)
@@ -128,9 +128,6 @@ type Querier interface {
 	ConsumeOTPChallenge(ctx context.Context, id uuid.UUID) (int64, error)
 	// Read positions of the current members (read receipts).
 	ConversationReaders(ctx context.Context, conversationID uuid.UUID) ([]ConversationReadersRow, error)
-	// Earlier attempts at the same settlement set that did not complete. Each retry needs its own
-	// idempotency key: the first key stays bound to the failed attempt.
-	CountFailedPayoutAttempts(ctx context.Context, arg CountFailedPayoutAttemptsParams) (int32, error)
 	CountInspectionAcknowledgements(ctx context.Context, arg CountInspectionAcknowledgementsParams) (int32, error)
 	CountListingPhotos(ctx context.Context, equipmentID uuid.UUID) (int32, error)
 	CountMemberUnread(ctx context.Context, userID uuid.NullUUID) (int32, error)
@@ -291,6 +288,10 @@ type Querier interface {
 	// trigger refuse an overlap.
 	ExtendBookingPeriod(ctx context.Context, arg ExtendBookingPeriodParams) (ExtendBookingPeriodRow, error)
 	FailPayment(ctx context.Context, arg FailPaymentParams) (Payment, error)
+	// Earlier attempts at the same settlement set that did not complete, and how long ago the last one
+	// was. Each retry needs its own idempotency key (the first key stays bound to the failed attempt)
+	// and waits longer each time, so a persistent problem (e.g. an empty balance) is not hammered.
+	FailedPayoutAttempts(ctx context.Context, arg FailedPayoutAttemptsParams) (FailedPayoutAttemptsRow, error)
 	FailedPayoutSettlements(ctx context.Context, payoutID uuid.UUID) ([]uuid.UUID, error)
 	FindModel(ctx context.Context, arg FindModelParams) (FindModelRow, error)
 	FinishDelivery(ctx context.Context, arg FinishDeliveryParams) error

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -12,6 +13,31 @@ import (
 	"github.com/equiprent/backend/internal/db"
 	"github.com/equiprent/backend/internal/ledger"
 )
+
+// AccountKind says which payout accounts a gateway may pay: accounts verified by
+// the same provider in the same mode. A simulated or test-mode account is never
+// sent live money (a real payout to a fake fund account would only fail), so after
+// switching from test to live keys owners must verify their account again.
+func AccountKind(gw PayoutGateway) (provider, mode string) {
+	switch {
+	case gw == nil:
+		return "", ""
+	case gw.Sandbox():
+		return "simulated", "simulated"
+	}
+	if m, ok := gw.(interface{ ModeName() string }); ok {
+		return "razorpay", m.ModeName()
+	}
+	return "razorpay", "live"
+}
+
+// RetryBackoff is how long to wait after the n-th failed attempt before trying the
+// same money again: 30m, 1h, 2h, 4h, then 6h. A persistent problem (an empty
+// RazorpayX balance, a closed account) is not hammered every 15 minutes.
+func RetryBackoff(attempts int32) time.Duration {
+	d := 30 * time.Minute << min(max(attempts-1, 0), 4)
+	return min(d, 6*time.Hour)
+}
 
 // live reports whether the gateway moves real money (asynchronously).
 func (s *Service) live() bool { return s.Gateway != nil && !s.Gateway.Sandbox() }
@@ -33,7 +59,8 @@ func (s *Service) RunPayouts(ctx context.Context, limit int32) error {
 	}
 	var rows []db.PayableSettlementsRow
 	if err := s.Tx.InTx(ctx, func(ctx context.Context) (err error) {
-		rows, err = s.q(ctx).PayableSettlements(ctx, db.PayableSettlementsParams{CooldownSecs: s.BankCooldown.Seconds(), Lim: limit})
+		provider, mode := AccountKind(s.Gateway)
+		rows, err = s.q(ctx).PayableSettlements(ctx, db.PayableSettlementsParams{CooldownSecs: s.BankCooldown.Seconds(), Provider: provider, Mode: mode, Lim: limit})
 		return
 	}); err != nil {
 		return err
@@ -87,15 +114,19 @@ func (s *Service) payOwner(ctx context.Context, owner uuid.UUID, group []db.Paya
 	}
 	base := IdemKey(owner, ids)
 	key := base
-	var failed int32
+	var prior db.FailedPayoutAttemptsRow
 	if err := s.Tx.InTx(ctx, func(ctx context.Context) (err error) {
-		failed, err = s.q(ctx).CountFailedPayoutAttempts(ctx, db.CountFailedPayoutAttemptsParams{OwnerOrgID: owner, BaseKey: base})
+		prior, err = s.q(ctx).FailedPayoutAttempts(ctx, db.FailedPayoutAttemptsParams{OwnerOrgID: owner, BaseKey: base})
 		return
 	}); err != nil {
 		return err
 	}
-	if failed > 0 {
-		key = fmt.Sprintf("%s:%d", base, failed) // a retry is a new payout with its own key
+	if prior.Attempts > 0 {
+		if wait := RetryBackoff(prior.Attempts); time.Duration(prior.SecsSinceLast*float64(time.Second)) < wait {
+			s.Log.Debug("payout retry is waiting out its backoff", "owner", owner, "attempts", prior.Attempts, "wait", wait)
+			return nil
+		}
+		key = fmt.Sprintf("%s:%d", base, prior.Attempts) // a retry is a new payout with its own key
 	}
 	var payoutID uuid.UUID
 	err := s.Tx.InTxAs(ctx, database.Actor{Role: "system", Reason: "payout"}, func(ctx context.Context) error {
@@ -174,9 +205,13 @@ func (s *Service) finishPaid(ctx context.Context, q *db.Queries, payoutID, owner
 	if err != nil {
 		return err
 	}
+	// The money has left, so the settlements are paid whatever state they are in now. A dispute
+	// opened after the payout was created moves a settlement to on_hold; insisting on "eligible"
+	// would roll everything back and leave a paid payout "processing" forever.
 	for _, it := range items {
-		if _, err := q.SetSettlementStatus(ctx, db.SetSettlementStatusParams{ID: it.ID, Status: db.SettlementStatusPaid,
-			FromStatuses: []string{string(db.SettlementStatusEligible)}}); err != nil {
+		_, err := q.SetSettlementStatus(ctx, db.SetSettlementStatusParams{ID: it.ID, Status: db.SettlementStatusPaid,
+			FromStatuses: []string{string(db.SettlementStatusEligible), string(db.SettlementStatusOnHold), string(db.SettlementStatusPending)}})
+		if err != nil && !errors.Is(database.MapError(err), apperror.ErrNotFound) { // not found = already paid
 			return err
 		}
 	}
@@ -209,7 +244,8 @@ func (s *Service) SubmitPending(ctx context.Context, limit int32) error {
 	}
 	var rows []db.PayoutsToSubmitRow
 	if err := s.Tx.InTx(ctx, func(ctx context.Context) (err error) {
-		rows, err = s.q(ctx).PayoutsToSubmit(ctx, db.PayoutsToSubmitParams{MinAgeSecs: 30, Lim: limit})
+		provider, mode := AccountKind(s.Gateway)
+		rows, err = s.q(ctx).PayoutsToSubmit(ctx, db.PayoutsToSubmitParams{MinAgeSecs: 30, Provider: provider, Mode: mode, Lim: limit})
 		return
 	}); err != nil {
 		return err

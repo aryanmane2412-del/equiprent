@@ -30,6 +30,40 @@ Future<bool> runVerificationAction(BuildContext context, Future<void> Function()
   }
 }
 
+/// Like [runVerificationAction], but blocks the screen with a progress message while a slow call
+/// (the bank's penny-drop check takes several seconds) runs, so it cannot be started twice.
+Future<bool> runVerificationActionWithProgress(
+  BuildContext context,
+  String message,
+  Future<void> Function() action, {
+  String? success,
+}) async {
+  final navigator = Navigator.of(context, rootNavigator: true);
+  var open = true;
+  // Not awaited: the dialog stays up until the action finishes.
+  showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    useRootNavigator: true,
+    builder: (_) => PopScope(
+      canPop: false,
+      child: AlertDialog(
+        key: const Key('verification-progress'),
+        content: Row(children: [
+          const SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 3)),
+          const SizedBox(width: 20),
+          Expanded(child: Text(message)),
+        ]),
+      ),
+    ),
+  ).whenComplete(() => open = false);
+  try {
+    return await runVerificationAction(context, action, success: success);
+  } finally {
+    if (open && navigator.mounted) navigator.pop();
+  }
+}
+
 AppTone toneFor(ApplicationStatus s) => switch (s) {
   ApplicationStatus.approved => AppTone.success,
   ApplicationStatus.rejected => AppTone.danger,

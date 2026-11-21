@@ -193,26 +193,6 @@ func (q *Queries) CommissionForBooking(ctx context.Context, bookingID uuid.UUID)
 	return i, err
 }
 
-const countFailedPayoutAttempts = `-- name: CountFailedPayoutAttempts :one
-SELECT count(*)::int FROM payouts
-WHERE owner_org_id = $1 AND status IN ('failed', 'reversed')
-  AND (idempotency_key = $2::text OR idempotency_key LIKE ($2::text || ':%'))
-`
-
-type CountFailedPayoutAttemptsParams struct {
-	OwnerOrgID uuid.UUID `json:"owner_org_id"`
-	BaseKey    string    `json:"base_key"`
-}
-
-// Earlier attempts at the same settlement set that did not complete. Each retry needs its own
-// idempotency key: the first key stays bound to the failed attempt.
-func (q *Queries) CountFailedPayoutAttempts(ctx context.Context, arg CountFailedPayoutAttemptsParams) (int32, error) {
-	row := q.db.QueryRow(ctx, countFailedPayoutAttempts, arg.OwnerOrgID, arg.BaseKey)
-	var column_1 int32
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const createPaymentV2 = `-- name: CreatePaymentV2 :one
 
 INSERT INTO payments (booking_id, payer_org_id, purpose, amount_paise, gateway, gateway_mode, gateway_order_id, idempotency_key)
@@ -481,6 +461,34 @@ func (q *Queries) EnsureLedgerAccount(ctx context.Context, arg EnsureLedgerAccou
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const failedPayoutAttempts = `-- name: FailedPayoutAttempts :one
+SELECT count(*)::int AS attempts,
+       COALESCE(extract(epoch FROM now() - max(created_at)), 1000000000)::float8 AS secs_since_last
+FROM payouts
+WHERE owner_org_id = $1 AND status IN ('failed', 'reversed')
+  AND (idempotency_key = $2::text OR idempotency_key LIKE ($2::text || ':%'))
+`
+
+type FailedPayoutAttemptsParams struct {
+	OwnerOrgID uuid.UUID `json:"owner_org_id"`
+	BaseKey    string    `json:"base_key"`
+}
+
+type FailedPayoutAttemptsRow struct {
+	Attempts      int32   `json:"attempts"`
+	SecsSinceLast float64 `json:"secs_since_last"`
+}
+
+// Earlier attempts at the same settlement set that did not complete, and how long ago the last one
+// was. Each retry needs its own idempotency key (the first key stays bound to the failed attempt)
+// and waits longer each time, so a persistent problem (e.g. an empty balance) is not hammered.
+func (q *Queries) FailedPayoutAttempts(ctx context.Context, arg FailedPayoutAttemptsParams) (FailedPayoutAttemptsRow, error) {
+	row := q.db.QueryRow(ctx, failedPayoutAttempts, arg.OwnerOrgID, arg.BaseKey)
+	var i FailedPayoutAttemptsRow
+	err := row.Scan(&i.Attempts, &i.SecsSinceLast)
+	return i, err
 }
 
 const failedPayoutSettlements = `-- name: FailedPayoutSettlements :many
@@ -2154,16 +2162,20 @@ FROM settlements s
 JOIN payout_linked_accounts l ON l.owner_org_id = s.owner_org_id AND l.activation_status = 'activated'
   -- a freshly added or changed payout account is held back (account-change fraud cool-down)
   AND l.updated_at <= now() - make_interval(secs => $1::float8)
+  -- a simulated or test-mode account is never sent live money (and vice versa)
+  AND l.provider = $2::text AND l.mode = $3::text
 WHERE s.status = 'eligible' AND s.net_payable_paise > 0
   AND NOT EXISTS (SELECT 1 FROM payout_items pi JOIN payouts po ON po.id = pi.payout_id
                    WHERE pi.settlement_id = s.id AND pi.active AND po.status IN ('queued', 'processing', 'paid'))
 ORDER BY s.eligible_at
-LIMIT $2
+LIMIT $4
 FOR UPDATE OF s SKIP LOCKED
 `
 
 type PayableSettlementsParams struct {
 	CooldownSecs float64 `json:"cooldown_secs"`
+	Provider     string  `json:"provider"`
+	Mode         string  `json:"mode"`
 	Lim          int32   `json:"lim"`
 }
 
@@ -2202,7 +2214,12 @@ type PayableSettlementsRow struct {
 }
 
 func (q *Queries) PayableSettlements(ctx context.Context, arg PayableSettlementsParams) ([]PayableSettlementsRow, error) {
-	rows, err := q.db.Query(ctx, payableSettlements, arg.CooldownSecs, arg.Lim)
+	rows, err := q.db.Query(ctx, payableSettlements,
+		arg.CooldownSecs,
+		arg.Provider,
+		arg.Mode,
+		arg.Lim,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -2407,12 +2424,15 @@ FROM payouts po JOIN payout_linked_accounts l ON l.id = po.linked_account_id
 WHERE po.status = 'processing' AND po.gateway_transfer_id IS NULL AND po.idempotency_key IS NOT NULL
   AND po.created_at < now() - make_interval(secs => $1::float8)
   AND l.updated_at <= po.created_at
+  AND l.provider = $2::text AND l.mode = $3::text
 ORDER BY po.created_at
-LIMIT $2
+LIMIT $4
 `
 
 type PayoutsToSubmitParams struct {
 	MinAgeSecs float64 `json:"min_age_secs"`
+	Provider   string  `json:"provider"`
+	Mode       string  `json:"mode"`
 	Lim        int32   `json:"lim"`
 }
 
@@ -2428,7 +2448,12 @@ type PayoutsToSubmitRow struct {
 // Payouts recorded but never confirmed as sent (timeout / crash). Re-sending with the same
 // idempotency key is safe. A payout is not re-sent if the payout account changed since.
 func (q *Queries) PayoutsToSubmit(ctx context.Context, arg PayoutsToSubmitParams) ([]PayoutsToSubmitRow, error) {
-	rows, err := q.db.Query(ctx, payoutsToSubmit, arg.MinAgeSecs, arg.Lim)
+	rows, err := q.db.Query(ctx, payoutsToSubmit,
+		arg.MinAgeSecs,
+		arg.Provider,
+		arg.Mode,
+		arg.Lim,
+	)
 	if err != nil {
 		return nil, err
 	}

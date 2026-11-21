@@ -225,7 +225,12 @@ class _OwnerBody extends ConsumerWidget {
       builder: (_) => const BankAccountForm(),
     );
     if (body == null || !context.mounted) return;
-    if (await runVerificationAction(context, () => ref.read(verificationApiProvider).setBankAccount(_org, body), success: 'Payout account verified')) {
+    if (await runVerificationActionWithProgress(
+      context,
+      'Verifying your account with the bank. This can take a few seconds.',
+      () => ref.read(verificationApiProvider).setBankAccount(_org, body),
+      success: 'Payout account verified',
+    )) {
       ref.invalidate(ownerVerificationProvider);
     }
   }

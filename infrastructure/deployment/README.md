@@ -46,6 +46,17 @@ Safety rules built in (all covered by `backend/tests/payout_live_test.go`):
 - A new or changed payout account is held back for `PAYOUT_BANK_COOLDOWN` (default 24h) so a hijacked
   account cannot redirect money. A settlement above `PAYOUT_MAX_PAISE` waits for a person.
 - The simulator never runs with real keys or in production.
+- A gateway only pays payout accounts its own provider and mode verified (`simulated`, RazorpayX `test`,
+  RazorpayX `live`). After switching from test to live keys, owners must verify their bank account again
+  (a fresh production database avoids the problem; otherwise an owner opens "Reopen" on their verification and saves the bank account again); until then
+  they appear under `unpayable_owners` in `/admin/payouts/attention`.
+- A failed attempt is retried with a new key after a growing wait (30m, 1h, 2h, 4h, then 6h), so an empty
+  RazorpayX balance is not hammered every 15 minutes. Top up the balance and the next retry succeeds.
+- If a dispute opens while a payout is in flight, the payout still completes when the bank confirms
+  (the money has already left); the dispute is then handled against the owner's next settlements.
+- Bank verification waits at most ~12 s (the app times out at 20 s). A slow bank is resumed on the
+  owner's next try instead of starting a new penny drop. A RazorpayX problem (e.g. no balance for the
+  penny drop) is shown to the owner as "temporarily unavailable", never as "your account was refused".
 
 **Go-live checklist (do these in order, do not skip the test-mode run):**
 
@@ -75,6 +86,30 @@ Safety rules built in (all covered by `backend/tests/payout_live_test.go`):
    7 days, **mismatches** between our books and the gateway (including a payout the bank reversed after it
    was marked paid), and **owners who cannot be paid** because they have no verified payout account.
    Also watch the worker logs for `ALERT:` lines. Check `attention` daily at first.
+
+### Resolving a stuck payout (engineer runbook)
+
+Admin access to the platform is read-only by design, so there is no button for this. It is rare: it needs an
+unknown submission outcome **and** a changed payout account. `/admin/payouts/attention` lists it under `stuck`
+(a `processing` payout with no `gateway_transfer_id` after 2 hours). **First look the payout up in the RazorpayX
+dashboard.** Its `reference_id` is the first 32 characters of the SHA-256 of the payout's `idempotency_key`:
+
+```sql
+SELECT id, amount_paise, left(encode(sha256(convert_to(idempotency_key, 'UTF8')), 'hex'), 32) AS reference_id
+FROM payouts WHERE id = '<payout id>';
+```
+
+- **It exists in RazorpayX** (money was sent): record its id and the worker finishes it automatically.
+  `UPDATE payouts SET gateway_transfer_id = 'pout_xxx' WHERE id = '<payout id>' AND gateway_transfer_id IS NULL;`
+- **It does not exist** (nothing was sent): release the money for a new payout.
+  ```sql
+  BEGIN;
+  UPDATE payouts SET status = 'failed', failure_reason = 'released by <name>: <why>'
+   WHERE id = '<payout id>' AND status = 'processing' AND gateway_transfer_id IS NULL;
+  UPDATE payout_items SET active = false WHERE payout_id = '<payout id>';
+  COMMIT;
+  ```
+Never release a payout you have not checked in RazorpayX: that could pay the owner twice.
 
 Not built (by choice): RazorpayX webhooks (the worker polls payout status every 2 minutes instead), and
 automatic handling of a payout the bank reverses after paying. Paid payouts are re-checked against the

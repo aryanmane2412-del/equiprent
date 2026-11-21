@@ -307,6 +307,8 @@ FROM settlements s
 JOIN payout_linked_accounts l ON l.owner_org_id = s.owner_org_id AND l.activation_status = 'activated'
   -- a freshly added or changed payout account is held back (account-change fraud cool-down)
   AND l.updated_at <= now() - make_interval(secs => @cooldown_secs::float8)
+  -- a simulated or test-mode account is never sent live money (and vice versa)
+  AND l.provider = @provider::text AND l.mode = @mode::text
 WHERE s.status = 'eligible' AND s.net_payable_paise > 0
   AND NOT EXISTS (SELECT 1 FROM payout_items pi JOIN payouts po ON po.id = pi.payout_id
                    WHERE pi.settlement_id = s.id AND pi.active AND po.status IN ('queued', 'processing', 'paid'))
@@ -479,13 +481,17 @@ FROM payouts po JOIN payout_linked_accounts l ON l.id = po.linked_account_id
 WHERE po.status = 'processing' AND po.gateway_transfer_id IS NULL AND po.idempotency_key IS NOT NULL
   AND po.created_at < now() - make_interval(secs => @min_age_secs::float8)
   AND l.updated_at <= po.created_at
+  AND l.provider = @provider::text AND l.mode = @mode::text
 ORDER BY po.created_at
 LIMIT @lim;
 
--- name: CountFailedPayoutAttempts :one
--- Earlier attempts at the same settlement set that did not complete. Each retry needs its own
--- idempotency key: the first key stays bound to the failed attempt.
-SELECT count(*)::int FROM payouts
+-- name: FailedPayoutAttempts :one
+-- Earlier attempts at the same settlement set that did not complete, and how long ago the last one
+-- was. Each retry needs its own idempotency key (the first key stays bound to the failed attempt)
+-- and waits longer each time, so a persistent problem (e.g. an empty balance) is not hammered.
+SELECT count(*)::int AS attempts,
+       COALESCE(extract(epoch FROM now() - max(created_at)), 1000000000)::float8 AS secs_since_last
+FROM payouts
 WHERE owner_org_id = @owner_org_id AND status IN ('failed', 'reversed')
   AND (idempotency_key = @base_key::text OR idempotency_key LIKE (@base_key::text || ':%'));
 

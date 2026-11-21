@@ -19,6 +19,7 @@ func (f *payoutFixture) backdatePayouts(hours int) {
 func TestFinanceSeesStuckAndReversedPayouts(t *testing.T) {
 	f := newPayoutFixture(t, 500_000, 700_000)
 	gw := newPayoutGateway()
+	f.liveAccount()
 	svc := f.service(gw, nil)
 	fin := f.e.financeAdmin()
 	attention := func() resp { return must(t, fin.do(http.MethodGet, "/admin/payouts/attention", nil), 200, "attention") }
@@ -26,7 +27,7 @@ func TestFinanceSeesStuckAndReversedPayouts(t *testing.T) {
 	if err := svc.RunPayouts(pctx, 50); err != nil {
 		t.Fatal(err)
 	}
-	if a := attention(); a.body["needs_attention"] != false {
+	if a := attention(); problems(a) != 0 {
 		t.Fatalf("a payout that was just sent is not a problem yet: %s", a.raw)
 	}
 
@@ -45,7 +46,7 @@ func TestFinanceSeesStuckAndReversedPayouts(t *testing.T) {
 	if err := svc.Reconcile(pctx, 50); err != nil {
 		t.Fatal(err)
 	}
-	if a := attention(); a.body["needs_attention"] != false {
+	if a := attention(); problems(a) != 0 {
 		t.Fatalf("a paid and reconciled payout needs nothing: %s", a.raw)
 	}
 
@@ -91,6 +92,13 @@ func TestFinanceSeesOwnersWhoCannotBePaid(t *testing.T) {
 	if len(a.list("unpayable_owners")) != 1 || a.str("unpayable_owners.0.eligible_paise") != "500000" || a.str("unpayable_owners.0.eligible_count") != "1" {
 		t.Fatalf("an owner with money waiting and no payout account must be listed: %s", a.raw)
 	}
+	// Still activated, but verified by a provider/mode the payout gateway in use does not pay:
+	// after switching from test to live keys the owner has to verify again, and finance must see it.
+	f.e.exec(`UPDATE payout_linked_accounts SET activation_status = 'activated', provider = 'razorpay', mode = 'live'`)
+	a = must(t, f.e.financeAdmin().do(http.MethodGet, "/admin/payouts/attention", nil), 200, "attention")
+	if len(a.list("unpayable_owners")) != 1 || a.body["automatic_payouts"] != true {
+		t.Fatalf("an account the gateway cannot pay must be listed as unpayable: %s", a.raw)
+	}
 }
 
 // Only finance/ops admins see payouts.
@@ -105,4 +113,9 @@ func TestPayoutAdminEndpointsArePrivate(t *testing.T) {
 	}
 	must(t, e.call(http.MethodGet, "/admin/payouts", "", "", nil, nil), 401, "anonymous")
 	must(t, e.financeAdmin().do(http.MethodGet, "/admin/payouts", nil), 200, "finance")
+}
+
+// problems counts the payouts that went wrong (not the owners who merely have no payout account).
+func problems(a resp) int {
+	return len(a.list("stuck")) + len(a.list("failed_recently")) + len(a.list("mismatches"))
 }
