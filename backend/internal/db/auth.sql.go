@@ -549,3 +549,37 @@ func (q *Queries) TouchSession(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, touchSession, id)
 	return err
 }
+
+const verifyAuthToken = `-- name: VerifyAuthToken :one
+WITH cand AS (
+  SELECT auth_tokens.id, (auth_tokens.token_hash = $1::bytea) AS ok FROM auth_tokens
+  WHERE auth_tokens.purpose = $2 AND auth_tokens.email = $3::citext AND auth_tokens.consumed_at IS NULL
+    AND auth_tokens.expires_at > now() AND auth_tokens.attempts < 5
+  ORDER BY auth_tokens.created_at DESC LIMIT 1
+  FOR UPDATE)
+UPDATE auth_tokens t SET attempts = t.attempts + (CASE WHEN c.ok THEN 0 ELSE 1 END),
+       consumed_at = CASE WHEN c.ok OR t.attempts + 1 >= 5 THEN now() END
+FROM cand c WHERE t.id = c.id
+RETURNING t.user_id, c.ok
+`
+
+type VerifyAuthTokenParams struct {
+	TokenHash []byte `json:"token_hash"`
+	Purpose   string `json:"purpose"`
+	Email     string `json:"email"`
+}
+
+type VerifyAuthTokenRow struct {
+	UserID uuid.UUID `json:"user_id"`
+	Ok     bool      `json:"ok"`
+}
+
+// One atomic step for the newest live token of this address: a wrong code costs an attempt
+// (the token is burned at 5), the right code consumes it. Expired, consumed or exhausted
+// tokens never match, so a code cannot be replayed or guessed without limit.
+func (q *Queries) VerifyAuthToken(ctx context.Context, arg VerifyAuthTokenParams) (VerifyAuthTokenRow, error) {
+	row := q.db.QueryRow(ctx, verifyAuthToken, arg.TokenHash, arg.Purpose, arg.Email)
+	var i VerifyAuthTokenRow
+	err := row.Scan(&i.UserID, &i.Ok)
+	return i, err
+}

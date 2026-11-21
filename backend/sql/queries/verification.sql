@@ -237,6 +237,9 @@ JOIN equipment e ON e.id = g.equipment_id AND e.deleted_at IS NULL
 WHERE g.user_id = @user_id AND g.organization_id = @organization_id
 ORDER BY e.title;
 
+-- name: EquipmentOwnedByOrg :one
+SELECT EXISTS (SELECT 1 FROM equipment WHERE id = @equipment_id AND owner_org_id = @org_id)::bool AS owned;
+
 -- name: FleetManagerEquipmentAccess :one
 -- Direct grants and fleet membership both count (fleet_manager_scope); a
 -- fleet-management restriction removes all access.

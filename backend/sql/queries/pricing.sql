@@ -92,7 +92,7 @@ ON CONFLICT (equipment_id) DO UPDATE
 -- Held bookings and owner blocks overlapping [from, to).
 SELECT lower(b.period)::timestamptz AS starts_at, upper(b.period)::timestamptz AS ends_at, 'booked'::text AS kind
 FROM bookings b
-WHERE b.equipment_id = @equipment_id AND booking_holds_slot(b.status)
+WHERE b.equipment_id = @equipment_id AND booking_holds_slot(b.status, b.resume_status)
   AND b.period && tstzrange(@from_at::timestamptz, @to_at::timestamptz, '[)')
 UNION ALL
 SELECT lower(a.period)::timestamptz, upper(a.period)::timestamptz, 'blocked'::text
@@ -105,7 +105,7 @@ ORDER BY 1;
 -- (candidates: the requested start and the end of every busy range).
 WITH busy AS (
   SELECT b.period FROM bookings b
-  WHERE b.equipment_id = @equipment_id AND booking_holds_slot(b.status) AND upper(b.period) > @from_at::timestamptz
+  WHERE b.equipment_id = @equipment_id AND booking_holds_slot(b.status, b.resume_status) AND upper(b.period) > @from_at::timestamptz
   UNION ALL
   SELECT a.period FROM availability_blocks a WHERE a.equipment_id = @equipment_id AND upper(a.period) > @from_at::timestamptz
 ), candidates AS (

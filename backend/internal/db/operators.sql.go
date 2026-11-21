@@ -107,6 +107,23 @@ func (q *Queries) GetOperatorProfile(ctx context.Context, userID uuid.UUID) (Ope
 	return i, err
 }
 
+const insertOperatorProfileIfAbsent = `-- name: InsertOperatorProfileIfAbsent :exec
+INSERT INTO operator_profiles (user_id, employer_organization_id)
+VALUES ($1, $2)
+ON CONFLICT (user_id) DO NOTHING
+`
+
+type InsertOperatorProfileIfAbsentParams struct {
+	UserID                 uuid.UUID     `json:"user_id"`
+	EmployerOrganizationID uuid.NullUUID `json:"employer_organization_id"`
+}
+
+// Creates an empty profile for a new operator; an existing profile is never touched.
+func (q *Queries) InsertOperatorProfileIfAbsent(ctx context.Context, arg InsertOperatorProfileIfAbsentParams) error {
+	_, err := q.db.Exec(ctx, insertOperatorProfileIfAbsent, arg.UserID, arg.EmployerOrganizationID)
+	return err
+}
+
 const isOrgOperator = `-- name: IsOrgOperator :one
 SELECT EXISTS (
   SELECT 1 FROM user_roles ur
@@ -222,6 +239,24 @@ func (q *Queries) ListOperatorSkills(ctx context.Context, operatorUserID uuid.UU
 	return items, nil
 }
 
+const operatorActiveElsewhere = `-- name: OperatorActiveElsewhere :one
+SELECT EXISTS (SELECT 1 FROM user_roles WHERE user_id = $1 AND role_code = 'operator' AND revoked_at IS NULL
+               AND organization_id IS DISTINCT FROM $2::uuid)::bool AS active
+`
+
+type OperatorActiveElsewhereParams struct {
+	UserID         uuid.UUID `json:"user_id"`
+	OrganizationID uuid.UUID `json:"organization_id"`
+}
+
+// The operator still holds the operator role in another organisation.
+func (q *Queries) OperatorActiveElsewhere(ctx context.Context, arg OperatorActiveElsewhereParams) (bool, error) {
+	row := q.db.QueryRow(ctx, operatorActiveElsewhere, arg.UserID, arg.OrganizationID)
+	var active bool
+	err := row.Scan(&active)
+	return active, err
+}
+
 const operatorVerificationLocked = `-- name: OperatorVerificationLocked :one
 SELECT EXISTS (
   SELECT 1 FROM verification_applications
@@ -251,6 +286,24 @@ func (q *Queries) SetOperatorDuty(ctx context.Context, arg SetOperatorDutyParams
 	var on_duty bool
 	err := row.Scan(&on_duty)
 	return on_duty, err
+}
+
+const setOperatorEmployer = `-- name: SetOperatorEmployer :execrows
+UPDATE operator_profiles SET employer_organization_id = $1 WHERE user_id = $2
+`
+
+type SetOperatorEmployerParams struct {
+	EmployerOrganizationID uuid.NullUUID `json:"employer_organization_id"`
+	UserID                 uuid.UUID     `json:"user_id"`
+}
+
+// Moves only the employer. Licence, experience, duty and verification stay as they are.
+func (q *Queries) SetOperatorEmployer(ctx context.Context, arg SetOperatorEmployerParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setOperatorEmployer, arg.EmployerOrganizationID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertOperatorProfile = `-- name: UpsertOperatorProfile :one

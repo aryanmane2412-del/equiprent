@@ -35,6 +35,19 @@ func (q *Queries) CompleteIdempotencyKey(ctx context.Context, arg CompleteIdempo
 	return err
 }
 
+const deleteExpiredAuthTokens = `-- name: DeleteExpiredAuthTokens :execrows
+DELETE FROM auth_tokens WHERE expires_at < now() - interval '1 day' OR consumed_at < now() - interval '1 day'
+`
+
+// Verification and reset tokens a day after they expired or were used.
+func (q *Queries) DeleteExpiredAuthTokens(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredAuthTokens)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteExpiredIdempotencyKeys = `-- name: DeleteExpiredIdempotencyKeys :execrows
 DELETE FROM idempotency_keys WHERE expires_at < now()
 `

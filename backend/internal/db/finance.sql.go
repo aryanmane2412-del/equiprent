@@ -13,6 +13,28 @@ import (
 	"github.com/google/uuid"
 )
 
+const approvedDamageDeductions = `-- name: ApprovedDamageDeductions :one
+SELECT COALESCE(sum(resolved_amount_paise - unrecovered_paise), 0)::bigint AS total FROM disputes
+WHERE booking_id = $1 AND status = 'resolved'
+  AND raised_by_org_id = $2 AND against_org_id = $3
+  AND resolved_amount_paise > 0 AND btrim(resolution) <> ''
+`
+
+type ApprovedDamageDeductionsParams struct {
+	BookingID     uuid.UUID `json:"booking_id"`
+	OwnerOrgID    uuid.UUID `json:"owner_org_id"`
+	CustomerOrgID uuid.UUID `json:"customer_org_id"`
+}
+
+// Resolved disputes the owner won against this customer (damage and any other approved charge),
+// each with a recorded resolution, less what could not be recovered from the deposit.
+func (q *Queries) ApprovedDamageDeductions(ctx context.Context, arg ApprovedDamageDeductionsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, approvedDamageDeductions, arg.BookingID, arg.OwnerOrgID, arg.CustomerOrgID)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
 const authorizePayment = `-- name: AuthorizePayment :one
 UPDATE payments SET status = 'authorized', gateway_payment_id = $1, method = $2, authorized_at = now()
 WHERE id = $3 AND status = 'created'
@@ -261,6 +283,33 @@ func (q *Queries) CurrentDefaultCommission(ctx context.Context) (CurrentDefaultC
 	return i, err
 }
 
+const currentTaxRate = `-- name: CurrentTaxRate :one
+
+SELECT rate_bps FROM tax_rules WHERE code = $1 AND effective_from <= $2 ORDER BY effective_from DESC LIMIT 1
+`
+
+type CurrentTaxRateParams struct {
+	Code string    `json:"code"`
+	At   time.Time `json:"at"`
+}
+
+// ---- tax rules, payout idempotency, reconciliation (000042) ----------------------------------
+func (q *Queries) CurrentTaxRate(ctx context.Context, arg CurrentTaxRateParams) (int32, error) {
+	row := q.db.QueryRow(ctx, currentTaxRate, arg.Code, arg.At)
+	var rate_bps int32
+	err := row.Scan(&rate_bps)
+	return rate_bps, err
+}
+
+const deactivatePayoutItems = `-- name: DeactivatePayoutItems :exec
+UPDATE payout_items SET active = false WHERE payout_id = $1
+`
+
+func (q *Queries) DeactivatePayoutItems(ctx context.Context, payoutID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deactivatePayoutItems, payoutID)
+	return err
+}
+
 const depositRefundedOnCancel = `-- name: DepositRefundedOnCancel :exec
 UPDATE security_deposits SET status = 'refunded_on_cancel', refunded_paise = LEAST(amount_paise, refunded_paise + $1),
        resolved_at = COALESCE(resolved_at, now())
@@ -275,6 +324,64 @@ type DepositRefundedOnCancelParams struct {
 func (q *Queries) DepositRefundedOnCancel(ctx context.Context, arg DepositRefundedOnCancelParams) error {
 	_, err := q.db.Exec(ctx, depositRefundedOnCancel, arg.AmountPaise, arg.PaymentID)
 	return err
+}
+
+const depositsToRelease = `-- name: DepositsToRelease :many
+SELECT d.id, d.booking_id, d.payment_id, d.owner_org_id, d.customer_org_id, d.amount_paise, d.status, d.claim_paise, d.claim_reason, d.claimed_by, d.claimed_at, d.deducted_paise, d.refunded_paise, d.resolution_note, d.resolved_by, d.resolved_at, d.refund_id, d.claim_deadline, d.created_at, d.updated_at FROM security_deposits d JOIN bookings b ON b.id = d.booking_id
+WHERE d.status = 'held' AND b.status IN ('completed', 'closed')
+  AND ((NOT EXISTS (SELECT 1 FROM disputes x WHERE x.booking_id = b.id AND x.status IN ('open', 'under_review'))
+        AND NOT EXISTS (SELECT 1 FROM issue_reports i WHERE i.booking_id = b.id AND i.kind = 'damage' AND i.status IN ('open', 'under_review')))
+       OR b.status_changed_at < now() - make_interval(secs => $1::float8))
+ORDER BY b.status_changed_at LIMIT $2
+FOR UPDATE OF d SKIP LOCKED
+`
+
+type DepositsToReleaseParams struct {
+	WindowSeconds float64 `json:"window_seconds"`
+	Lim           int32   `json:"lim"`
+}
+
+// Held deposits of completed bookings. Released at once when no damage claim is open, else
+// after the claim window so an unresolved claim can never keep a customer's money forever.
+func (q *Queries) DepositsToRelease(ctx context.Context, arg DepositsToReleaseParams) ([]SecurityDeposit, error) {
+	rows, err := q.db.Query(ctx, depositsToRelease, arg.WindowSeconds, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SecurityDeposit{}
+	for rows.Next() {
+		var i SecurityDeposit
+		if err := rows.Scan(
+			&i.ID,
+			&i.BookingID,
+			&i.PaymentID,
+			&i.OwnerOrgID,
+			&i.CustomerOrgID,
+			&i.AmountPaise,
+			&i.Status,
+			&i.ClaimPaise,
+			&i.ClaimReason,
+			&i.ClaimedBy,
+			&i.ClaimedAt,
+			&i.DeductedPaise,
+			&i.RefundedPaise,
+			&i.ResolutionNote,
+			&i.ResolvedBy,
+			&i.ResolvedAt,
+			&i.RefundID,
+			&i.ClaimDeadline,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const dueDeposits = `-- name: DueDeposits :many
@@ -354,6 +461,30 @@ func (q *Queries) EnsureLedgerAccount(ctx context.Context, arg EnsureLedgerAccou
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const failedPayoutSettlements = `-- name: FailedPayoutSettlements :many
+SELECT pi.settlement_id FROM payout_items pi WHERE pi.payout_id = $1
+`
+
+func (q *Queries) FailedPayoutSettlements(ctx context.Context, payoutID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, failedPayoutSettlements, payoutID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var settlement_id uuid.UUID
+		if err := rows.Scan(&settlement_id); err != nil {
+			return nil, err
+		}
+		items = append(items, settlement_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const finishPayout = `-- name: FinishPayout :one
@@ -540,6 +671,17 @@ func (q *Queries) GetOpenPayment(ctx context.Context, arg GetOpenPaymentParams) 
 		&i.AuthorizedAt,
 	)
 	return i, err
+}
+
+const getPayoutGatewayID = `-- name: GetPayoutGatewayID :one
+SELECT gateway_transfer_id FROM payouts WHERE id = $1
+`
+
+func (q *Queries) GetPayoutGatewayID(ctx context.Context, id uuid.UUID) (*string, error) {
+	row := q.db.QueryRow(ctx, getPayoutGatewayID, id)
+	var gateway_transfer_id *string
+	err := row.Scan(&gateway_transfer_id)
+	return gateway_transfer_id, err
 }
 
 const getReceipt = `-- name: GetReceipt :one
@@ -757,6 +899,55 @@ func (q *Queries) GetSettlementByBooking(ctx context.Context, bookingID uuid.UUI
 	return i, err
 }
 
+const heldDepositsOfCancelled = `-- name: HeldDepositsOfCancelled :many
+SELECT d.id, d.booking_id, d.payment_id, d.owner_org_id, d.customer_org_id, d.amount_paise, d.status, d.claim_paise, d.claim_reason, d.claimed_by, d.claimed_at, d.deducted_paise, d.refunded_paise, d.resolution_note, d.resolved_by, d.resolved_at, d.refund_id, d.claim_deadline, d.created_at, d.updated_at FROM security_deposits d JOIN bookings b ON b.id = d.booking_id
+WHERE d.status = 'held' AND b.status IN ('cancelled', 'refund_pending', 'refunded', 'expired', 'rejected')
+  AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.booking_id = b.id AND r.status = 'pending')
+ORDER BY d.created_at LIMIT $1
+FOR UPDATE OF d SKIP LOCKED
+`
+
+func (q *Queries) HeldDepositsOfCancelled(ctx context.Context, lim int32) ([]SecurityDeposit, error) {
+	rows, err := q.db.Query(ctx, heldDepositsOfCancelled, lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SecurityDeposit{}
+	for rows.Next() {
+		var i SecurityDeposit
+		if err := rows.Scan(
+			&i.ID,
+			&i.BookingID,
+			&i.PaymentID,
+			&i.OwnerOrgID,
+			&i.CustomerOrgID,
+			&i.AmountPaise,
+			&i.Status,
+			&i.ClaimPaise,
+			&i.ClaimReason,
+			&i.ClaimedBy,
+			&i.ClaimedAt,
+			&i.DeductedPaise,
+			&i.RefundedPaise,
+			&i.ResolutionNote,
+			&i.ResolvedBy,
+			&i.ResolvedAt,
+			&i.RefundID,
+			&i.ClaimDeadline,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const holdDisputedSettlements = `-- name: HoldDisputedSettlements :many
 UPDATE settlements s SET status = 'on_hold', hold_reason = 'A dispute is open on this booking'
 WHERE s.status IN ('pending', 'eligible')
@@ -947,6 +1138,34 @@ func (q *Queries) InsertPayout(ctx context.Context, arg InsertPayoutParams) (uui
 	return id, err
 }
 
+const insertPayoutIdem = `-- name: InsertPayoutIdem :one
+INSERT INTO payouts (owner_org_id, bank_account_id, linked_account_id, amount_paise, status, batch_date, idempotency_key)
+VALUES ($1, $2, $3, $4, 'processing', (now() AT TIME ZONE 'Asia/Kolkata')::date, $5)
+ON CONFLICT (owner_org_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+RETURNING id
+`
+
+type InsertPayoutIdemParams struct {
+	OwnerOrgID      uuid.UUID     `json:"owner_org_id"`
+	BankAccountID   uuid.NullUUID `json:"bank_account_id"`
+	LinkedAccountID uuid.NullUUID `json:"linked_account_id"`
+	AmountPaise     int64         `json:"amount_paise"`
+	IdempotencyKey  *string       `json:"idempotency_key"`
+}
+
+func (q *Queries) InsertPayoutIdem(ctx context.Context, arg InsertPayoutIdemParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, insertPayoutIdem,
+		arg.OwnerOrgID,
+		arg.BankAccountID,
+		arg.LinkedAccountID,
+		arg.AmountPaise,
+		arg.IdempotencyKey,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const insertPayoutItem = `-- name: InsertPayoutItem :exec
 INSERT INTO payout_items (payout_id, settlement_id, amount_paise) VALUES ($1, $2, $3)
 `
@@ -987,6 +1206,30 @@ func (q *Queries) InsertPayoutTransfer(ctx context.Context, arg InsertPayoutTran
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const insertReconciliation = `-- name: InsertReconciliation :exec
+INSERT INTO payout_reconciliations (payout_id, gateway_status, gateway_paise, matches, note)
+VALUES ($1, $2, $3, $4, $5)
+`
+
+type InsertReconciliationParams struct {
+	PayoutID      uuid.UUID `json:"payout_id"`
+	GatewayStatus string    `json:"gateway_status"`
+	GatewayPaise  int64     `json:"gateway_paise"`
+	Matches       bool      `json:"matches"`
+	Note          *string   `json:"note"`
+}
+
+func (q *Queries) InsertReconciliation(ctx context.Context, arg InsertReconciliationParams) error {
+	_, err := q.db.Exec(ctx, insertReconciliation,
+		arg.PayoutID,
+		arg.GatewayStatus,
+		arg.GatewayPaise,
+		arg.Matches,
+		arg.Note,
+	)
+	return err
 }
 
 const insertSecurityDeposit = `-- name: InsertSecurityDeposit :exec
@@ -1558,6 +1801,51 @@ func (q *Queries) ListPayouts(ctx context.Context, arg ListPayoutsParams) ([]Lis
 	return items, nil
 }
 
+const listReconciliationMismatches = `-- name: ListReconciliationMismatches :many
+SELECT r.id, r.payout_id, r.gateway_status, r.gateway_paise, r.matches, r.note, r.checked_at, p.owner_org_id FROM payout_reconciliations r JOIN payouts p ON p.id = r.payout_id
+WHERE NOT r.matches ORDER BY r.checked_at DESC LIMIT $1
+`
+
+type ListReconciliationMismatchesRow struct {
+	ID            uuid.UUID `json:"id"`
+	PayoutID      uuid.UUID `json:"payout_id"`
+	GatewayStatus string    `json:"gateway_status"`
+	GatewayPaise  int64     `json:"gateway_paise"`
+	Matches       bool      `json:"matches"`
+	Note          *string   `json:"note"`
+	CheckedAt     time.Time `json:"checked_at"`
+	OwnerOrgID    uuid.UUID `json:"owner_org_id"`
+}
+
+func (q *Queries) ListReconciliationMismatches(ctx context.Context, lim int32) ([]ListReconciliationMismatchesRow, error) {
+	rows, err := q.db.Query(ctx, listReconciliationMismatches, lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListReconciliationMismatchesRow{}
+	for rows.Next() {
+		var i ListReconciliationMismatchesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.PayoutID,
+			&i.GatewayStatus,
+			&i.GatewayPaise,
+			&i.Matches,
+			&i.Note,
+			&i.CheckedAt,
+			&i.OwnerOrgID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSettlements = `-- name: ListSettlements :many
 SELECT s.id, s.booking_id, s.owner_org_id, s.commission_rule_id, s.commission_bps, s.gross_paise, s.commission_paise, s.gst_on_commission_paise, s.tcs_paise, s.tds_paise, s.deductions_paise, s.net_payable_paise, s.currency, s.eligible_at, s.status, s.hold_reason, s.created_at, s.updated_at, s.customer_paid_paise, s.rental_paise, s.delivery_paise, s.owner_tax_paise, s.platform_fee_paise, s.platform_fee_tax_paise, s.deposit_deduction_paise, s.commission_base_paise, s.refunded_paise, s.paid_at, b.reference AS booking_reference, e.title AS equipment_title, o.display_name AS owner_name
 FROM settlements s JOIN bookings b ON b.id = s.booking_id JOIN equipment e ON e.id = b.equipment_id
@@ -1846,7 +2134,7 @@ FROM settlements s
 JOIN payout_linked_accounts l ON l.owner_org_id = s.owner_org_id AND l.activation_status = 'activated'
 WHERE s.status = 'eligible' AND s.net_payable_paise > 0
   AND NOT EXISTS (SELECT 1 FROM payout_items pi JOIN payouts po ON po.id = pi.payout_id
-                   WHERE pi.settlement_id = s.id AND po.status IN ('queued', 'processing', 'paid'))
+                   WHERE pi.settlement_id = s.id AND pi.active AND po.status IN ('queued', 'processing', 'paid'))
 ORDER BY s.eligible_at
 LIMIT $1
 FOR UPDATE OF s SKIP LOCKED
@@ -1938,6 +2226,22 @@ func (q *Queries) PayableSettlements(ctx context.Context, lim int32) ([]PayableS
 	return items, nil
 }
 
+const payoutByIdempotencyKey = `-- name: PayoutByIdempotencyKey :one
+SELECT id FROM payouts WHERE owner_org_id = $1 AND idempotency_key = $2
+`
+
+type PayoutByIdempotencyKeyParams struct {
+	OwnerOrgID uuid.UUID `json:"owner_org_id"`
+	Key        *string   `json:"key"`
+}
+
+func (q *Queries) PayoutByIdempotencyKey(ctx context.Context, arg PayoutByIdempotencyKeyParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, payoutByIdempotencyKey, arg.OwnerOrgID, arg.Key)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const payoutSettlements = `-- name: PayoutSettlements :many
 SELECT s.id, s.booking_id, s.net_payable_paise FROM payout_items pi JOIN settlements s ON s.id = pi.settlement_id WHERE pi.payout_id = $1
 `
@@ -1984,6 +2288,55 @@ func (q *Queries) PayoutTransferState(ctx context.Context, payoutID uuid.UUID) (
 	var i PayoutTransferStateRow
 	err := row.Scan(&i.Open, &i.Failed)
 	return i, err
+}
+
+const payoutsToReconcile = `-- name: PayoutsToReconcile :many
+SELECT id, owner_org_id, amount_paise, status::text AS status FROM payouts
+WHERE status IN ('processing', 'paid') AND NOT EXISTS (SELECT 1 FROM payout_reconciliations r WHERE r.payout_id = payouts.id AND r.matches)
+ORDER BY created_at LIMIT $1
+`
+
+type PayoutsToReconcileRow struct {
+	ID          uuid.UUID `json:"id"`
+	OwnerOrgID  uuid.UUID `json:"owner_org_id"`
+	AmountPaise int64     `json:"amount_paise"`
+	Status      string    `json:"status"`
+}
+
+func (q *Queries) PayoutsToReconcile(ctx context.Context, lim int32) ([]PayoutsToReconcileRow, error) {
+	rows, err := q.db.Query(ctx, payoutsToReconcile, lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PayoutsToReconcileRow{}
+	for rows.Next() {
+		var i PayoutsToReconcileRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerOrgID,
+			&i.AmountPaise,
+			&i.Status,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const processedRefundTotal = `-- name: ProcessedRefundTotal :one
+SELECT COALESCE(sum(amount_paise), 0)::bigint AS total FROM refunds WHERE payment_id = $1 AND status = 'processed'
+`
+
+func (q *Queries) ProcessedRefundTotal(ctx context.Context, paymentID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, processedRefundTotal, paymentID)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
 }
 
 const refundablePayment = `-- name: RefundablePayment :one
@@ -2096,6 +2449,20 @@ func (q *Queries) ResolveDeposit(ctx context.Context, arg ResolveDepositParams) 
 	return i, err
 }
 
+const setPayoutGatewayID = `-- name: SetPayoutGatewayID :exec
+UPDATE payouts SET gateway_transfer_id = $1 WHERE id = $2
+`
+
+type SetPayoutGatewayIDParams struct {
+	GatewayTransferID *string   `json:"gateway_transfer_id"`
+	ID                uuid.UUID `json:"id"`
+}
+
+func (q *Queries) SetPayoutGatewayID(ctx context.Context, arg SetPayoutGatewayIDParams) error {
+	_, err := q.db.Exec(ctx, setPayoutGatewayID, arg.GatewayTransferID, arg.ID)
+	return err
+}
+
 const setSettlementStatus = `-- name: SetSettlementStatus :one
 UPDATE settlements SET status = $1, hold_reason = $2,
        paid_at = CASE WHEN $1 = 'paid' THEN now() ELSE paid_at END
@@ -2205,6 +2572,35 @@ func (q *Queries) SettlementCandidates(ctx context.Context, lim int32) ([]uuid.U
 		return nil, err
 	}
 	return items, nil
+}
+
+const settlementInputs = `-- name: SettlementInputs :one
+SELECT b.id, b.owner_org_id, b.price_snapshot AS price, b.status_changed_at,
+       (o.gstin IS NOT NULL)::bool AS owner_gst, (o.pan_enc IS NOT NULL)::bool AS owner_pan
+FROM bookings b JOIN organizations o ON o.id = b.owner_org_id WHERE b.id = $1
+`
+
+type SettlementInputsRow struct {
+	ID              uuid.UUID       `json:"id"`
+	OwnerOrgID      uuid.UUID       `json:"owner_org_id"`
+	Price           json.RawMessage `json:"price"`
+	StatusChangedAt time.Time       `json:"status_changed_at"`
+	OwnerGst        bool            `json:"owner_gst"`
+	OwnerPan        bool            `json:"owner_pan"`
+}
+
+func (q *Queries) SettlementInputs(ctx context.Context, bookingID uuid.UUID) (SettlementInputsRow, error) {
+	row := q.db.QueryRow(ctx, settlementInputs, bookingID)
+	var i SettlementInputsRow
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerOrgID,
+		&i.Price,
+		&i.StatusChangedAt,
+		&i.OwnerGst,
+		&i.OwnerPan,
+	)
+	return i, err
 }
 
 const startDepositClocks = `-- name: StartDepositClocks :many

@@ -38,7 +38,7 @@ WHERE equipment_id = @equipment_id AND id <> @id AND status IN ('requested', 'qu
 -- Held bookings (other than @booking_id) and owner blocks overlapping [from, to).
 SELECT lower(b.period)::timestamptz AS starts_at, upper(b.period)::timestamptz AS ends_at, 'booked'::text AS kind
 FROM bookings b
-WHERE b.equipment_id = @equipment_id AND b.id <> @booking_id AND booking_holds_slot(b.status)
+WHERE b.equipment_id = @equipment_id AND b.id <> @booking_id AND booking_holds_slot(b.status, b.resume_status)
   AND b.period && tstzrange(@from_at::timestamptz, @to_at::timestamptz, '[)')
 UNION ALL
 SELECT lower(a.period)::timestamptz, upper(a.period)::timestamptz, 'blocked'::text
@@ -129,22 +129,47 @@ FROM refunds r WHERE r.booking_id = @booking_id ORDER BY r.created_at;
 -- name: CountOpenRefunds :one
 SELECT count(*)::int FROM refunds WHERE booking_id = @booking_id AND status = 'pending';
 
--- name: ClaimPendingRefunds :many
--- Refunds the worker sends to the gateway (gateway_refund_id empty) or waits on.
-SELECT r.id, r.payment_id, r.booking_id, r.amount_paise, r.idempotency_key, r.attempts, r.gateway_refund_id,
-       p.gateway, p.gateway_payment_id
-FROM refunds r
-JOIN payments p ON p.id = r.payment_id
-WHERE r.status = 'pending' AND r.gateway_refund_id IS NULL AND r.attempts < 10
-ORDER BY r.created_at
-LIMIT @batch_size
-FOR UPDATE OF r SKIP LOCKED;
+-- name: ClaimRefundsForSubmit :many
+-- Short transaction: marks due refunds as submitting before the gateway is called. A refund
+-- stuck in submitting (worker crashed mid-call) is claimed again after 10 minutes and the
+-- worker looks it up at the gateway before sending anything.
+WITH due AS (
+  SELECT r.id FROM refunds r
+  WHERE r.status = 'pending' AND r.gateway_refund_id IS NULL AND (r.attempts < @max_attempts::int OR r.submit_state <> 'queued')
+    AND ((r.submit_state IN ('queued', 'uncertain') AND r.next_attempt_at <= now())
+      OR (r.submit_state = 'submitting' AND r.submit_started_at < now() - interval '10 minutes'))
+  ORDER BY r.created_at
+  LIMIT @batch_size
+  FOR UPDATE SKIP LOCKED)
+UPDATE refunds r SET submit_state = 'submitting', submit_started_at = now(), attempts = r.attempts + 1
+FROM due, payments p
+WHERE r.id = due.id AND p.id = r.payment_id
+RETURNING r.id, r.payment_id, r.booking_id, r.amount_paise, r.idempotency_key, r.attempts, p.gateway, p.gateway_payment_id;
 
 -- name: MarkRefundSubmitted :exec
-UPDATE refunds SET gateway_refund_id = @gateway_refund_id, attempts = attempts + 1 WHERE id = @id AND status = 'pending';
+UPDATE refunds SET gateway_refund_id = @gateway_refund_id, submit_state = 'submitted', failure_reason = NULL, last_checked_at = now()
+WHERE id = @id AND status = 'pending' AND gateway_refund_id IS NULL;
 
--- name: MarkRefundAttemptFailed :exec
-UPDATE refunds SET attempts = attempts + 1, failure_reason = @failure_reason WHERE id = @id AND status = 'pending';
+-- name: MarkRefundRetry :exec
+-- A rejected (definite) or unknown (uncertain) gateway answer: try again later with backoff.
+UPDATE refunds SET submit_state = CASE WHEN @uncertain::bool THEN 'uncertain' ELSE 'queued' END,
+       failure_reason = @failure_reason, next_attempt_at = now() + make_interval(secs => @delay_seconds::float8)
+WHERE id = @id AND status = 'pending' AND gateway_refund_id IS NULL;
+
+-- name: SubmittedRefundsToCheck :many
+-- Refunds the gateway accepted but has not confirmed (no webhook yet).
+SELECT id, booking_id, gateway_refund_id FROM refunds
+WHERE status = 'pending' AND gateway_refund_id IS NOT NULL
+  AND COALESCE(last_checked_at, submit_started_at, created_at) < now() - interval '10 minutes'
+ORDER BY created_at LIMIT @batch_size;
+
+-- name: TouchRefundCheck :exec
+UPDATE refunds SET last_checked_at = now() WHERE id = @id;
+
+-- name: GetRefundLedgerInfo :one
+SELECT r.amount_paise, r.booking_id, r.payment_id,
+       EXISTS (SELECT 1 FROM security_deposits d WHERE d.refund_id = r.id) AS is_deposit
+FROM refunds r WHERE r.id = @id;
 
 -- name: MarkRefundProcessed :one
 UPDATE refunds SET status = 'processed', processed_at = now(), gateway_refund_id = COALESCE(sqlc.narg(gateway_refund_id), gateway_refund_id)

@@ -375,6 +375,22 @@ func (q *Queries) EnsureFleetManagerProfile(ctx context.Context, arg EnsureFleet
 	return err
 }
 
+const equipmentOwnedByOrg = `-- name: EquipmentOwnedByOrg :one
+SELECT EXISTS (SELECT 1 FROM equipment WHERE id = $1 AND owner_org_id = $2)::bool AS owned
+`
+
+type EquipmentOwnedByOrgParams struct {
+	EquipmentID uuid.UUID `json:"equipment_id"`
+	OrgID       uuid.UUID `json:"org_id"`
+}
+
+func (q *Queries) EquipmentOwnedByOrg(ctx context.Context, arg EquipmentOwnedByOrgParams) (bool, error) {
+	row := q.db.QueryRow(ctx, equipmentOwnedByOrg, arg.EquipmentID, arg.OrgID)
+	var owned bool
+	err := row.Scan(&owned)
+	return owned, err
+}
+
 const fleetManagerEquipmentAccess = `-- name: FleetManagerEquipmentAccess :one
 SELECT (COALESCE((SELECT f.all_equipment FROM fleet_manager_profiles f WHERE f.user_id = $1 AND f.organization_id = $2), false)
         AND NOT is_restricted($1, 'fleet_management'))::bool AS all_equipment,

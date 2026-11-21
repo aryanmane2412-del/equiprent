@@ -342,18 +342,19 @@ func (q *Queries) InsertSourcedPing(ctx context.Context, arg InsertSourcedPingPa
 const insertTelematicsDevice = `-- name: InsertTelematicsDevice :one
 
 INSERT INTO telematics_devices (equipment_id, owner_org_id, provider, external_id, token_sha256, label, created_by)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+SELECT e.id, e.owner_org_id, $1, $2, $3, $4, $5
+FROM equipment e WHERE e.id = $6 AND e.owner_org_id = $7 AND e.deleted_at IS NULL
 RETURNING id, equipment_id, provider, external_id, label, status, last_seen_at, created_at
 `
 
 type InsertTelematicsDeviceParams struct {
-	EquipmentID uuid.UUID     `json:"equipment_id"`
-	OwnerOrgID  uuid.UUID     `json:"owner_org_id"`
 	Provider    string        `json:"provider"`
 	ExternalID  string        `json:"external_id"`
 	TokenSha256 []byte        `json:"token_sha256"`
 	Label       *string       `json:"label"`
 	CreatedBy   uuid.NullUUID `json:"created_by"`
+	EquipmentID uuid.UUID     `json:"equipment_id"`
+	OwnerOrgID  uuid.UUID     `json:"owner_org_id"`
 }
 
 type InsertTelematicsDeviceRow struct {
@@ -368,15 +369,16 @@ type InsertTelematicsDeviceRow struct {
 }
 
 // ---- hardware trackers -------------------------------------------------------------------------------
+// Only for a machine the organisation owns (no row otherwise).
 func (q *Queries) InsertTelematicsDevice(ctx context.Context, arg InsertTelematicsDeviceParams) (InsertTelematicsDeviceRow, error) {
 	row := q.db.QueryRow(ctx, insertTelematicsDevice,
-		arg.EquipmentID,
-		arg.OwnerOrgID,
 		arg.Provider,
 		arg.ExternalID,
 		arg.TokenSha256,
 		arg.Label,
 		arg.CreatedBy,
+		arg.EquipmentID,
+		arg.OwnerOrgID,
 	)
 	var i InsertTelematicsDeviceRow
 	err := row.Scan(
@@ -481,8 +483,13 @@ func (q *Queries) ListLocationAccess(ctx context.Context, arg ListLocationAccess
 
 const listTelematicsDevices = `-- name: ListTelematicsDevices :many
 SELECT id, equipment_id, provider, external_id, label, status, last_seen_at, created_at
-FROM telematics_devices WHERE equipment_id = $1 ORDER BY created_at DESC
+FROM telematics_devices WHERE equipment_id = $1 AND owner_org_id = $2 ORDER BY created_at DESC
 `
+
+type ListTelematicsDevicesParams struct {
+	EquipmentID uuid.UUID `json:"equipment_id"`
+	OwnerOrgID  uuid.UUID `json:"owner_org_id"`
+}
 
 type ListTelematicsDevicesRow struct {
 	ID          uuid.UUID  `json:"id"`
@@ -495,8 +502,8 @@ type ListTelematicsDevicesRow struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
-func (q *Queries) ListTelematicsDevices(ctx context.Context, equipmentID uuid.UUID) ([]ListTelematicsDevicesRow, error) {
-	rows, err := q.db.Query(ctx, listTelematicsDevices, equipmentID)
+func (q *Queries) ListTelematicsDevices(ctx context.Context, arg ListTelematicsDevicesParams) ([]ListTelematicsDevicesRow, error) {
+	rows, err := q.db.Query(ctx, listTelematicsDevices, arg.EquipmentID, arg.OwnerOrgID)
 	if err != nil {
 		return nil, err
 	}
@@ -567,16 +574,17 @@ func (q *Queries) OpenTripForEquipment(ctx context.Context, equipmentID uuid.UUI
 }
 
 const revokeTelematicsDevice = `-- name: RevokeTelematicsDevice :execrows
-UPDATE telematics_devices SET status = 'revoked', revoked_at = now() WHERE id = $1 AND equipment_id = $2 AND status = 'active'
+UPDATE telematics_devices SET status = 'revoked', revoked_at = now() WHERE id = $1 AND equipment_id = $2 AND owner_org_id = $3 AND status = 'active'
 `
 
 type RevokeTelematicsDeviceParams struct {
 	ID          uuid.UUID `json:"id"`
 	EquipmentID uuid.UUID `json:"equipment_id"`
+	OwnerOrgID  uuid.UUID `json:"owner_org_id"`
 }
 
 func (q *Queries) RevokeTelematicsDevice(ctx context.Context, arg RevokeTelematicsDeviceParams) (int64, error) {
-	result, err := q.db.Exec(ctx, revokeTelematicsDevice, arg.ID, arg.EquipmentID)
+	result, err := q.db.Exec(ctx, revokeTelematicsDevice, arg.ID, arg.EquipmentID, arg.OwnerOrgID)
 	if err != nil {
 		return 0, err
 	}

@@ -2564,6 +2564,7 @@ type AuthToken struct {
 	ExpiresAt  time.Time  `json:"expires_at"`
 	ConsumedAt *time.Time `json:"consumed_at"`
 	CreatedAt  time.Time  `json:"created_at"`
+	Attempts   int32      `json:"attempts"`
 }
 
 type AvailabilityBlock struct {
@@ -2631,6 +2632,7 @@ type Booking struct {
 	PaymentDueAt         *time.Time                       `json:"payment_due_at"`
 	CustomerType         string                           `json:"customer_type"`
 	CustomerDetails      json.RawMessage                  `json:"customer_details"`
+	CompletedAt          *time.Time                       `json:"completed_at"`
 }
 
 type BookingEvent struct {
@@ -2824,6 +2826,8 @@ type Dispute struct {
 	OpenedAt            time.Time       `json:"opened_at"`
 	ResolvedAt          *time.Time      `json:"resolved_at"`
 	UpdatedAt           time.Time       `json:"updated_at"`
+	RefundedPaise       int64           `json:"refunded_paise"`
+	UnrecoveredPaise    int64           `json:"unrecovered_paise"`
 }
 
 type DriverCompensation struct {
@@ -3417,6 +3421,18 @@ type OperatorSkill struct {
 	CategoryID     uuid.UUID `json:"category_id"`
 }
 
+type OrgInvitation struct {
+	ID             uuid.UUID  `json:"id"`
+	OrganizationID uuid.UUID  `json:"organization_id"`
+	InviteeUserID  uuid.UUID  `json:"invitee_user_id"`
+	RoleCode       string     `json:"role_code"`
+	InvitedBy      uuid.UUID  `json:"invited_by"`
+	Status         string     `json:"status"`
+	ExpiresAt      time.Time  `json:"expires_at"`
+	RespondedAt    *time.Time `json:"responded_at"`
+	CreatedAt      time.Time  `json:"created_at"`
+}
+
 type Organization struct {
 	ID               uuid.UUID          `json:"id"`
 	LegalName        string             `json:"legal_name"`
@@ -3519,12 +3535,14 @@ type Payout struct {
 	CreatedAt         time.Time     `json:"created_at"`
 	UpdatedAt         time.Time     `json:"updated_at"`
 	LinkedAccountID   uuid.NullUUID `json:"linked_account_id"`
+	IdempotencyKey    *string       `json:"idempotency_key"`
 }
 
 type PayoutItem struct {
 	PayoutID     uuid.UUID `json:"payout_id"`
 	SettlementID uuid.UUID `json:"settlement_id"`
 	AmountPaise  int64     `json:"amount_paise"`
+	Active       bool      `json:"active"`
 }
 
 type PayoutLinkedAccount struct {
@@ -3540,6 +3558,16 @@ type PayoutLinkedAccount struct {
 	CreatedBy        uuid.NullUUID   `json:"created_by"`
 	CreatedAt        time.Time       `json:"created_at"`
 	UpdatedAt        time.Time       `json:"updated_at"`
+}
+
+type PayoutReconciliation struct {
+	ID            uuid.UUID `json:"id"`
+	PayoutID      uuid.UUID `json:"payout_id"`
+	GatewayStatus string    `json:"gateway_status"`
+	GatewayPaise  int64     `json:"gateway_paise"`
+	Matches       bool      `json:"matches"`
+	Note          *string   `json:"note"`
+	CheckedAt     time.Time `json:"checked_at"`
 }
 
 type PayoutTransfer struct {
@@ -3601,6 +3629,10 @@ type Refund struct {
 	BookingID       uuid.UUID     `json:"booking_id"`
 	FailureReason   *string       `json:"failure_reason"`
 	Attempts        int32         `json:"attempts"`
+	SubmitState     string        `json:"submit_state"`
+	SubmitStartedAt *time.Time    `json:"submit_started_at"`
+	NextAttemptAt   time.Time     `json:"next_attempt_at"`
+	LastCheckedAt   *time.Time    `json:"last_checked_at"`
 }
 
 type RentalAgreement struct {
@@ -3785,6 +3817,16 @@ type TaxRate struct {
 	ReviewedAt     *time.Time `json:"reviewed_at"`
 }
 
+type TaxRule struct {
+	ID            uuid.UUID     `json:"id"`
+	Code          string        `json:"code"`
+	RateBps       int32         `json:"rate_bps"`
+	EffectiveFrom time.Time     `json:"effective_from"`
+	Note          *string       `json:"note"`
+	CreatedBy     uuid.NullUUID `json:"created_by"`
+	CreatedAt     time.Time     `json:"created_at"`
+}
+
 type TelematicsDevice struct {
 	ID          uuid.UUID     `json:"id"`
 	EquipmentID uuid.UUID     `json:"equipment_id"`
@@ -3904,6 +3946,9 @@ type WebhookEvent struct {
 	ReceivedAt     time.Time       `json:"received_at"`
 	ProcessedAt    *time.Time      `json:"processed_at"`
 	Error          *string         `json:"error"`
+	Status         string          `json:"status"`
+	Attempts       int32           `json:"attempts"`
+	LockedAt       *time.Time      `json:"locked_at"`
 }
 
 type WorkLog struct {

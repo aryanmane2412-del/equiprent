@@ -75,3 +75,20 @@ RETURNING *;
 
 -- name: CountOpenDisputes :one
 SELECT count(*)::int FROM disputes WHERE booking_id = @booking_id AND status IN ('open', 'under_review');
+
+-- name: BookingCompletedAt :one
+SELECT completed_at FROM bookings WHERE id = @id;
+
+-- name: SettleDispute :exec
+UPDATE disputes SET refunded_paise = @refunded_paise, unrecovered_paise = @unrecovered_paise WHERE id = @id;
+
+-- name: HeldDepositOfBooking :one
+-- The security deposit still held for a booking (0 when none) and the payment that carries it.
+SELECT COALESCE(sum(amount_paise), 0)::bigint AS held_paise, COALESCE(max(payment_id::text), '')::text AS payment_id
+FROM security_deposits WHERE booking_id = @booking_id AND status = 'held';
+
+-- name: ChargedAgainstDeposit :one
+-- What other resolved owner-raised disputes of the booking already claim from the deposit.
+SELECT COALESCE(sum(resolved_amount_paise - unrecovered_paise), 0)::bigint AS charged
+FROM disputes WHERE booking_id = @booking_id AND id <> @exclude_id AND status = 'resolved'
+  AND raised_by_org_id = @owner_org_id AND resolved_amount_paise > 0;

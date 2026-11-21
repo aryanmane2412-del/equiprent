@@ -102,3 +102,18 @@ INSERT INTO equipment_inspection_policy_consents (user_id, policy_version)
 VALUES (@user_id, @policy_version)
 RETURNING id, user_id, policy_version, accepted_at;
 
+
+-- name: VerifyAuthToken :one
+-- One atomic step for the newest live token of this address: a wrong code costs an attempt
+-- (the token is burned at 5), the right code consumes it. Expired, consumed or exhausted
+-- tokens never match, so a code cannot be replayed or guessed without limit.
+WITH cand AS (
+  SELECT auth_tokens.id, (auth_tokens.token_hash = @token_hash::bytea) AS ok FROM auth_tokens
+  WHERE auth_tokens.purpose = @purpose AND auth_tokens.email = @email::citext AND auth_tokens.consumed_at IS NULL
+    AND auth_tokens.expires_at > now() AND auth_tokens.attempts < 5
+  ORDER BY auth_tokens.created_at DESC LIMIT 1
+  FOR UPDATE)
+UPDATE auth_tokens t SET attempts = t.attempts + (CASE WHEN c.ok THEN 0 ELSE 1 END),
+       consumed_at = CASE WHEN c.ok OR t.attempts + 1 >= 5 THEN now() END
+FROM cand c WHERE t.id = c.id
+RETURNING t.user_id, c.ok;

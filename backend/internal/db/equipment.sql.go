@@ -530,7 +530,7 @@ func (q *Queries) ListPricingPlans(ctx context.Context, equipmentID uuid.UUID) (
 const retireOwnerEquipment = `-- name: RetireOwnerEquipment :execrows
 UPDATE equipment SET status = 'retired', deleted_at = now(), version = version + 1
 WHERE equipment.id = $1 AND equipment.owner_org_id = $2 AND equipment.deleted_at IS NULL
-  AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.equipment_id = equipment.id AND booking_holds_slot(b.status))
+  AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.equipment_id = equipment.id AND booking_holds_slot(b.status, b.resume_status))
 `
 
 type RetireOwnerEquipmentParams struct {
@@ -573,7 +573,7 @@ WHERE e.status = 'active'
   AND ST_DWithin(e.base_location, site.g, LEAST(e.service_radius_km, $10::int) * 1000.0)
   AND NOT EXISTS (
     SELECT 1 FROM bookings b
-    WHERE b.equipment_id = e.id AND booking_holds_slot(b.status)
+    WHERE b.equipment_id = e.id AND booking_holds_slot(b.status, b.resume_status)
       AND b.period && tstzrange($11::timestamptz, $12::timestamptz, '[)'))
   AND NOT EXISTS (
     SELECT 1 FROM availability_blocks a

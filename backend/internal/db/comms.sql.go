@@ -1702,7 +1702,7 @@ func (q *Queries) ListUserDevices(ctx context.Context, userID uuid.UUID) ([]List
 const maintenanceConflicts = `-- name: MaintenanceConflicts :many
 SELECT reference, lower(period)::timestamptz AS starts_at, upper(period)::timestamptz AS ends_at
 FROM bookings
-WHERE equipment_id = $1 AND booking_holds_slot(status)
+WHERE equipment_id = $1 AND booking_holds_slot(status, resume_status)
   AND period && tstzrange($2::timestamptz, $3::timestamptz, '[)')
 ORDER BY lower(period)
 LIMIT 5

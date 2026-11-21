@@ -14,8 +14,9 @@ import (
 
 const capturePayment = `-- name: CapturePayment :one
 UPDATE payments
-SET status = 'captured', gateway_payment_id = $1, method = $2, captured_at = now()
-WHERE id = $3 AND status IN ('created', 'authorized')
+SET status = 'captured', gateway_payment_id = $1, method = $2, captured_at = now(),
+    failure_code = NULL, failure_reason = NULL
+WHERE id = $3 AND status IN ('created', 'authorized', 'failed')
 RETURNING id, booking_id, payer_org_id, purpose, amount_paise, currency, method, gateway, gateway_order_id, gateway_payment_id, status, idempotency_key, failure_code, failure_reason, offline_proof_object_key, offline_confirmed_by, captured_at, created_at, updated_at, receipt_number, gateway_mode, authorized_at
 `
 
@@ -53,6 +54,70 @@ func (q *Queries) CapturePayment(ctx context.Context, arg CapturePaymentParams) 
 		&i.AuthorizedAt,
 	)
 	return i, err
+}
+
+const claimWebhookByID = `-- name: ClaimWebhookByID :one
+UPDATE webhook_events SET status = 'processing', attempts = attempts + 1, locked_at = now(), error = NULL
+WHERE id = $1 AND (status IN ('received', 'failed') OR (status = 'processing' AND locked_at < now() - interval '5 minutes'))
+RETURNING payload
+`
+
+func (q *Queries) ClaimWebhookByID(ctx context.Context, id uuid.UUID) (json.RawMessage, error) {
+	row := q.db.QueryRow(ctx, claimWebhookByID, id)
+	var payload json.RawMessage
+	err := row.Scan(&payload)
+	return payload, err
+}
+
+const claimWebhookEvent = `-- name: ClaimWebhookEvent :one
+INSERT INTO webhook_events (provider, event_id, event_type, payload, signature_valid, status, attempts, locked_at)
+VALUES ($1, $2, $3, $4, $5, 'processing', 1, now())
+ON CONFLICT (provider, event_id) DO UPDATE
+SET status = 'processing', attempts = webhook_events.attempts + 1, locked_at = now(), error = NULL
+WHERE webhook_events.status IN ('received', 'failed')
+   OR (webhook_events.status = 'processing' AND webhook_events.locked_at < now() - interval '5 minutes')
+RETURNING id
+`
+
+type ClaimWebhookEventParams struct {
+	Provider       string          `json:"provider"`
+	EventID        string          `json:"event_id"`
+	EventType      string          `json:"event_type"`
+	Payload        json.RawMessage `json:"payload"`
+	SignatureValid bool            `json:"signature_valid"`
+}
+
+// New deliveries start processing; a redelivery re-claims only a failed, received or
+// stale-processing event. A processed or in-flight duplicate returns no row.
+func (q *Queries) ClaimWebhookEvent(ctx context.Context, arg ClaimWebhookEventParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, claimWebhookEvent,
+		arg.Provider,
+		arg.EventID,
+		arg.EventType,
+		arg.Payload,
+		arg.SignatureValid,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const countOtherCapturedPayments = `-- name: CountOtherCapturedPayments :one
+SELECT count(*)::int FROM payments
+WHERE booking_id = $1 AND purpose = $2 AND id <> $3 AND status IN ('captured', 'partially_refunded')
+`
+
+type CountOtherCapturedPaymentsParams struct {
+	BookingID uuid.UUID      `json:"booking_id"`
+	Purpose   PaymentPurpose `json:"purpose"`
+	ExcludeID uuid.UUID      `json:"exclude_id"`
+}
+
+func (q *Queries) CountOtherCapturedPayments(ctx context.Context, arg CountOtherCapturedPaymentsParams) (int32, error) {
+	row := q.db.QueryRow(ctx, countOtherCapturedPayments, arg.BookingID, arg.Purpose, arg.ExcludeID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const createPayment = `-- name: CreatePayment :one
@@ -124,6 +189,47 @@ type FailPaymentParams struct {
 
 func (q *Queries) FailPayment(ctx context.Context, arg FailPaymentParams) (Payment, error) {
 	row := q.db.QueryRow(ctx, failPayment, arg.FailureCode, arg.FailureReason, arg.ID)
+	var i Payment
+	err := row.Scan(
+		&i.ID,
+		&i.BookingID,
+		&i.PayerOrgID,
+		&i.Purpose,
+		&i.AmountPaise,
+		&i.Currency,
+		&i.Method,
+		&i.Gateway,
+		&i.GatewayOrderID,
+		&i.GatewayPaymentID,
+		&i.Status,
+		&i.IdempotencyKey,
+		&i.FailureCode,
+		&i.FailureReason,
+		&i.OfflineProofObjectKey,
+		&i.OfflineConfirmedBy,
+		&i.CapturedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ReceiptNumber,
+		&i.GatewayMode,
+		&i.AuthorizedAt,
+	)
+	return i, err
+}
+
+const getOpenBookingPayment = `-- name: GetOpenBookingPayment :one
+SELECT id, booking_id, payer_org_id, purpose, amount_paise, currency, method, gateway, gateway_order_id, gateway_payment_id, status, idempotency_key, failure_code, failure_reason, offline_proof_object_key, offline_confirmed_by, captured_at, created_at, updated_at, receipt_number, gateway_mode, authorized_at FROM payments
+WHERE booking_id = $1 AND purpose = $2 AND status IN ('created', 'authorized')
+ORDER BY created_at DESC LIMIT 1
+`
+
+type GetOpenBookingPaymentParams struct {
+	BookingID uuid.UUID      `json:"booking_id"`
+	Purpose   PaymentPurpose `json:"purpose"`
+}
+
+func (q *Queries) GetOpenBookingPayment(ctx context.Context, arg GetOpenBookingPaymentParams) (Payment, error) {
+	row := q.db.QueryRow(ctx, getOpenBookingPayment, arg.BookingID, arg.Purpose)
 	var i Payment
 	err := row.Scan(
 		&i.ID,
@@ -254,35 +360,6 @@ func (q *Queries) GetPaymentByOrderID(ctx context.Context, gatewayOrderID *strin
 	return i, err
 }
 
-const insertWebhookEvent = `-- name: InsertWebhookEvent :one
-INSERT INTO webhook_events (provider, event_id, event_type, payload, signature_valid)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (provider, event_id) DO NOTHING
-RETURNING id
-`
-
-type InsertWebhookEventParams struct {
-	Provider       string          `json:"provider"`
-	EventID        string          `json:"event_id"`
-	EventType      string          `json:"event_type"`
-	Payload        json.RawMessage `json:"payload"`
-	SignatureValid bool            `json:"signature_valid"`
-}
-
-// A duplicate delivery (same provider + event id) returns no row.
-func (q *Queries) InsertWebhookEvent(ctx context.Context, arg InsertWebhookEventParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, insertWebhookEvent,
-		arg.Provider,
-		arg.EventID,
-		arg.EventType,
-		arg.Payload,
-		arg.SignatureValid,
-	)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
 const listBookingPayments = `-- name: ListBookingPayments :many
 SELECT id, booking_id, payer_org_id, purpose, amount_paise, currency, method, gateway, gateway_order_id, gateway_payment_id, status, idempotency_key, failure_code, failure_reason, offline_proof_object_key, offline_confirmed_by, captured_at, created_at, updated_at, receipt_number, gateway_mode, authorized_at FROM payments WHERE booking_id = $1 ORDER BY created_at
 `
@@ -330,17 +407,80 @@ func (q *Queries) ListBookingPayments(ctx context.Context, bookingID uuid.UUID) 
 	return items, nil
 }
 
-const markWebhookProcessed = `-- name: MarkWebhookProcessed :exec
-UPDATE webhook_events SET processed_at = now(), error = $1 WHERE id = $2
+const listRetryableWebhooks = `-- name: ListRetryableWebhooks :many
+SELECT id, provider, payload, attempts FROM webhook_events
+WHERE signature_valid AND attempts < $1
+  AND (status IN ('received', 'failed') OR (status = 'processing' AND locked_at < now() - interval '5 minutes'))
+  AND received_at < now() - interval '1 minute'
+ORDER BY received_at LIMIT $2
 `
 
-type MarkWebhookProcessedParams struct {
+type ListRetryableWebhooksParams struct {
+	MaxAttempts int32 `json:"max_attempts"`
+	Batch       int32 `json:"batch"`
+}
+
+type ListRetryableWebhooksRow struct {
+	ID       uuid.UUID       `json:"id"`
+	Provider string          `json:"provider"`
+	Payload  json.RawMessage `json:"payload"`
+	Attempts int32           `json:"attempts"`
+}
+
+func (q *Queries) ListRetryableWebhooks(ctx context.Context, arg ListRetryableWebhooksParams) ([]ListRetryableWebhooksRow, error) {
+	rows, err := q.db.Query(ctx, listRetryableWebhooks, arg.MaxAttempts, arg.Batch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRetryableWebhooksRow{}
+	for rows.Next() {
+		var i ListRetryableWebhooksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Provider,
+			&i.Payload,
+			&i.Attempts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockPaymentKey = `-- name: LockPaymentKey :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+`
+
+func (q *Queries) LockPaymentKey(ctx context.Context, key string) error {
+	_, err := q.db.Exec(ctx, lockPaymentKey, key)
+	return err
+}
+
+const markWebhookFailed = `-- name: MarkWebhookFailed :exec
+UPDATE webhook_events SET status = 'failed', error = $1, locked_at = NULL WHERE id = $2
+`
+
+type MarkWebhookFailedParams struct {
 	Error *string   `json:"error"`
 	ID    uuid.UUID `json:"id"`
 }
 
-func (q *Queries) MarkWebhookProcessed(ctx context.Context, arg MarkWebhookProcessedParams) error {
-	_, err := q.db.Exec(ctx, markWebhookProcessed, arg.Error, arg.ID)
+func (q *Queries) MarkWebhookFailed(ctx context.Context, arg MarkWebhookFailedParams) error {
+	_, err := q.db.Exec(ctx, markWebhookFailed, arg.Error, arg.ID)
+	return err
+}
+
+const markWebhookProcessed = `-- name: MarkWebhookProcessed :exec
+UPDATE webhook_events SET status = 'processed', processed_at = now(), error = NULL, locked_at = NULL WHERE id = $1
+`
+
+func (q *Queries) MarkWebhookProcessed(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markWebhookProcessed, id)
 	return err
 }
 

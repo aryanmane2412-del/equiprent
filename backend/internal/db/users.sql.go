@@ -78,6 +78,32 @@ func (q *Queries) GetAddress(ctx context.Context, id uuid.UUID) (GetAddressRow, 
 	return i, err
 }
 
+const getInvitationForUpdate = `-- name: GetInvitationForUpdate :one
+SELECT id, organization_id, invitee_user_id, role_code, invited_by, status, expires_at, responded_at, created_at FROM org_invitations WHERE id = $1 AND invitee_user_id = $2 FOR UPDATE
+`
+
+type GetInvitationForUpdateParams struct {
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) GetInvitationForUpdate(ctx context.Context, arg GetInvitationForUpdateParams) (OrgInvitation, error) {
+	row := q.db.QueryRow(ctx, getInvitationForUpdate, arg.ID, arg.UserID)
+	var i OrgInvitation
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.InviteeUserID,
+		&i.RoleCode,
+		&i.InvitedBy,
+		&i.Status,
+		&i.ExpiresAt,
+		&i.RespondedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const insertAddress = `-- name: InsertAddress :one
 INSERT INTO addresses (organization_id, label, line1, line2, locality, city, district, state_code, pincode, location, is_site)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
@@ -125,6 +151,85 @@ func (q *Queries) InsertAddress(ctx context.Context, arg InsertAddressParams) (I
 	var i InsertAddressRow
 	err := row.Scan(&i.ID, &i.CreatedAt)
 	return i, err
+}
+
+const insertInvitation = `-- name: InsertInvitation :one
+INSERT INTO org_invitations (organization_id, invitee_user_id, role_code, invited_by)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (organization_id, invitee_user_id, role_code) WHERE status = 'pending' DO NOTHING
+RETURNING id, organization_id, invitee_user_id, role_code, invited_by, status, expires_at, responded_at, created_at
+`
+
+type InsertInvitationParams struct {
+	OrganizationID uuid.UUID `json:"organization_id"`
+	InviteeUserID  uuid.UUID `json:"invitee_user_id"`
+	RoleCode       string    `json:"role_code"`
+	InvitedBy      uuid.UUID `json:"invited_by"`
+}
+
+func (q *Queries) InsertInvitation(ctx context.Context, arg InsertInvitationParams) (OrgInvitation, error) {
+	row := q.db.QueryRow(ctx, insertInvitation,
+		arg.OrganizationID,
+		arg.InviteeUserID,
+		arg.RoleCode,
+		arg.InvitedBy,
+	)
+	var i OrgInvitation
+	err := row.Scan(
+		&i.ID,
+		&i.OrganizationID,
+		&i.InviteeUserID,
+		&i.RoleCode,
+		&i.InvitedBy,
+		&i.Status,
+		&i.ExpiresAt,
+		&i.RespondedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const listMyInvitations = `-- name: ListMyInvitations :many
+SELECT i.id, i.organization_id, o.display_name AS organization_name, i.role_code, i.created_at, i.expires_at
+FROM org_invitations i JOIN organizations o ON o.id = i.organization_id
+WHERE i.invitee_user_id = $1 AND i.status = 'pending' AND i.expires_at > now()
+ORDER BY i.created_at DESC
+`
+
+type ListMyInvitationsRow struct {
+	ID               uuid.UUID `json:"id"`
+	OrganizationID   uuid.UUID `json:"organization_id"`
+	OrganizationName string    `json:"organization_name"`
+	RoleCode         string    `json:"role_code"`
+	CreatedAt        time.Time `json:"created_at"`
+	ExpiresAt        time.Time `json:"expires_at"`
+}
+
+func (q *Queries) ListMyInvitations(ctx context.Context, userID uuid.UUID) ([]ListMyInvitationsRow, error) {
+	rows, err := q.db.Query(ctx, listMyInvitations, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMyInvitationsRow{}
+	for rows.Next() {
+		var i ListMyInvitationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrganizationID,
+			&i.OrganizationName,
+			&i.RoleCode,
+			&i.CreatedAt,
+			&i.ExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listOrgAddresses = `-- name: ListOrgAddresses :many
@@ -178,6 +283,53 @@ func (q *Queries) ListOrgAddresses(ctx context.Context, organizationID uuid.UUID
 			&i.Lat,
 			&i.Lng,
 			&i.HasLocation,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOrgInvitations = `-- name: ListOrgInvitations :many
+SELECT i.id, i.invitee_user_id, u.full_name, u.phone, i.role_code, i.status, i.created_at, i.expires_at
+FROM org_invitations i JOIN users u ON u.id = i.invitee_user_id
+WHERE i.organization_id = $1 AND i.status = 'pending' AND i.expires_at > now()
+ORDER BY i.created_at DESC
+`
+
+type ListOrgInvitationsRow struct {
+	ID            uuid.UUID `json:"id"`
+	InviteeUserID uuid.UUID `json:"invitee_user_id"`
+	FullName      string    `json:"full_name"`
+	Phone         string    `json:"phone"`
+	RoleCode      string    `json:"role_code"`
+	Status        string    `json:"status"`
+	CreatedAt     time.Time `json:"created_at"`
+	ExpiresAt     time.Time `json:"expires_at"`
+}
+
+func (q *Queries) ListOrgInvitations(ctx context.Context, organizationID uuid.UUID) ([]ListOrgInvitationsRow, error) {
+	rows, err := q.db.Query(ctx, listOrgInvitations, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOrgInvitationsRow{}
+	for rows.Next() {
+		var i ListOrgInvitationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.InviteeUserID,
+			&i.FullName,
+			&i.Phone,
+			&i.RoleCode,
+			&i.Status,
+			&i.CreatedAt,
+			&i.ExpiresAt,
 		); err != nil {
 			return nil, err
 		}
@@ -263,6 +415,42 @@ func (q *Queries) ListOrgUserIDsWithRoles(ctx context.Context, arg ListOrgUserID
 		return nil, err
 	}
 	return items, nil
+}
+
+const respondInvitation = `-- name: RespondInvitation :execrows
+UPDATE org_invitations SET status = $1, responded_at = now()
+WHERE id = $2 AND status = 'pending' AND ($1::text <> 'accepted' OR expires_at > now())
+`
+
+type RespondInvitationParams struct {
+	Status string    `json:"status"`
+	ID     uuid.UUID `json:"id"`
+}
+
+func (q *Queries) RespondInvitation(ctx context.Context, arg RespondInvitationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, respondInvitation, arg.Status, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeInvitation = `-- name: RevokeInvitation :execrows
+UPDATE org_invitations SET status = 'revoked', responded_at = now()
+WHERE id = $1 AND organization_id = $2 AND status = 'pending'
+`
+
+type RevokeInvitationParams struct {
+	ID             uuid.UUID `json:"id"`
+	OrganizationID uuid.UUID `json:"organization_id"`
+}
+
+func (q *Queries) RevokeInvitation(ctx context.Context, arg RevokeInvitationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeInvitation, arg.ID, arg.OrganizationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateOrganization = `-- name: UpdateOrganization :one

@@ -364,7 +364,7 @@ func (q *Queries) ListTaxRates(ctx context.Context) ([]TaxRate, error) {
 const nextFreeStart = `-- name: NextFreeStart :one
 WITH busy AS (
   SELECT b.period FROM bookings b
-  WHERE b.equipment_id = $3 AND booking_holds_slot(b.status) AND upper(b.period) > $1::timestamptz
+  WHERE b.equipment_id = $3 AND booking_holds_slot(b.status, b.resume_status) AND upper(b.period) > $1::timestamptz
   UNION ALL
   SELECT a.period FROM availability_blocks a WHERE a.equipment_id = $3 AND upper(a.period) > $1::timestamptz
 ), candidates AS (
@@ -472,7 +472,7 @@ func (q *Queries) SetBookingRules(ctx context.Context, arg SetBookingRulesParams
 const slotConflicts = `-- name: SlotConflicts :many
 SELECT lower(b.period)::timestamptz AS starts_at, upper(b.period)::timestamptz AS ends_at, 'booked'::text AS kind
 FROM bookings b
-WHERE b.equipment_id = $1 AND booking_holds_slot(b.status)
+WHERE b.equipment_id = $1 AND booking_holds_slot(b.status, b.resume_status)
   AND b.period && tstzrange($2::timestamptz, $3::timestamptz, '[)')
 UNION ALL
 SELECT lower(a.period)::timestamptz, upper(a.period)::timestamptz, 'blocked'::text

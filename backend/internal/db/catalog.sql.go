@@ -477,7 +477,7 @@ WHERE e.status = 'active'
   AND ST_DWithin(e.base_location, site.g, LEAST(e.service_radius_km, $6::int) * 1000.0)
   AND NOT EXISTS (
     SELECT 1 FROM bookings b
-    WHERE b.equipment_id = e.id AND booking_holds_slot(b.status)
+    WHERE b.equipment_id = e.id AND booking_holds_slot(b.status, b.resume_status)
       AND b.period && tstzrange($7::timestamptz, $8::timestamptz, '[)'))
   AND NOT EXISTS (
     SELECT 1 FROM availability_blocks a

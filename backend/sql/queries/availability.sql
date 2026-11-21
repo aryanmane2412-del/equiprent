@@ -3,7 +3,7 @@
 SELECT starts_at, ends_at, kind FROM (
   SELECT lower(b.period)::timestamptz AS starts_at, upper(b.period)::timestamptz AS ends_at, 'booked'::text AS kind
   FROM bookings b
-  WHERE b.equipment_id = @equipment_id AND booking_holds_slot(b.status)
+  WHERE b.equipment_id = @equipment_id AND booking_holds_slot(b.status, b.resume_status)
     AND b.period && tstzrange(@from_at::timestamptz, @to_at::timestamptz, '[)')
   UNION ALL
   SELECT lower(a.period)::timestamptz, upper(a.period)::timestamptz, 'blocked'::text
@@ -27,6 +27,6 @@ DELETE FROM availability_blocks WHERE id = @id AND equipment_id = @equipment_id;
 SELECT id, reference, status, lower(period)::timestamptz AS starts_at, upper(period)::timestamptz AS ends_at
 FROM bookings
 WHERE equipment_id = @equipment_id
-  AND booking_holds_slot(status) -- booked only: requests awaiting the owner do not hold dates
+  AND booking_holds_slot(status, resume_status) -- booked only: requests awaiting the owner do not hold dates
   AND period && tstzrange(@from_at::timestamptz, @to_at::timestamptz, '[)')
 ORDER BY lower(period);

@@ -89,16 +89,18 @@ FROM trips t WHERE t.booking_id = @booking_id ORDER BY t.started_at;
 -- ---- hardware trackers -------------------------------------------------------------------------------
 
 -- name: InsertTelematicsDevice :one
+-- Only for a machine the organisation owns (no row otherwise).
 INSERT INTO telematics_devices (equipment_id, owner_org_id, provider, external_id, token_sha256, label, created_by)
-VALUES (@equipment_id, @owner_org_id, @provider, @external_id, @token_sha256, sqlc.narg(label), @created_by)
+SELECT e.id, e.owner_org_id, @provider, @external_id, @token_sha256, sqlc.narg(label), @created_by
+FROM equipment e WHERE e.id = @equipment_id AND e.owner_org_id = @owner_org_id AND e.deleted_at IS NULL
 RETURNING id, equipment_id, provider, external_id, label, status, last_seen_at, created_at;
 
 -- name: ListTelematicsDevices :many
 SELECT id, equipment_id, provider, external_id, label, status, last_seen_at, created_at
-FROM telematics_devices WHERE equipment_id = @equipment_id ORDER BY created_at DESC;
+FROM telematics_devices WHERE equipment_id = @equipment_id AND owner_org_id = @owner_org_id ORDER BY created_at DESC;
 
 -- name: RevokeTelematicsDevice :execrows
-UPDATE telematics_devices SET status = 'revoked', revoked_at = now() WHERE id = @id AND equipment_id = @equipment_id AND status = 'active';
+UPDATE telematics_devices SET status = 'revoked', revoked_at = now() WHERE id = @id AND equipment_id = @equipment_id AND owner_org_id = @owner_org_id AND status = 'active';
 
 -- name: DeviceByToken :one
 SELECT d.id, d.equipment_id, d.owner_org_id, d.provider, d.external_id

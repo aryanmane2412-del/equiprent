@@ -61,3 +61,32 @@ SELECT EXISTS (
   WHERE user_id = @user_id AND organization_id = @organization_id AND revoked_at IS NULL
     AND role_code = ANY(@roles::text[])
 ) AS ok;
+
+-- name: InsertInvitation :one
+INSERT INTO org_invitations (organization_id, invitee_user_id, role_code, invited_by)
+VALUES (@organization_id, @invitee_user_id, @role_code, @invited_by)
+ON CONFLICT (organization_id, invitee_user_id, role_code) WHERE status = 'pending' DO NOTHING
+RETURNING *;
+
+-- name: ListMyInvitations :many
+SELECT i.id, i.organization_id, o.display_name AS organization_name, i.role_code, i.created_at, i.expires_at
+FROM org_invitations i JOIN organizations o ON o.id = i.organization_id
+WHERE i.invitee_user_id = @user_id AND i.status = 'pending' AND i.expires_at > now()
+ORDER BY i.created_at DESC;
+
+-- name: GetInvitationForUpdate :one
+SELECT * FROM org_invitations WHERE id = @id AND invitee_user_id = @user_id FOR UPDATE;
+
+-- name: RespondInvitation :execrows
+UPDATE org_invitations SET status = @status, responded_at = now()
+WHERE id = @id AND status = 'pending' AND (@status::text <> 'accepted' OR expires_at > now());
+
+-- name: RevokeInvitation :execrows
+UPDATE org_invitations SET status = 'revoked', responded_at = now()
+WHERE id = @id AND organization_id = @organization_id AND status = 'pending';
+
+-- name: ListOrgInvitations :many
+SELECT i.id, i.invitee_user_id, u.full_name, u.phone, i.role_code, i.status, i.created_at, i.expires_at
+FROM org_invitations i JOIN users u ON u.id = i.invitee_user_id
+WHERE i.organization_id = @organization_id AND i.status = 'pending' AND i.expires_at > now()
+ORDER BY i.created_at DESC;

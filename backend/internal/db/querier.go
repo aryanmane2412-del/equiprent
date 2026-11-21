@@ -6,6 +6,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,6 +52,9 @@ type Querier interface {
 	ApproveCustomerDeliveryPhoto(ctx context.Context, arg ApproveCustomerDeliveryPhotoParams) (uuid.UUID, error)
 	ApproveSubmittedDocuments(ctx context.Context, arg ApproveSubmittedDocumentsParams) error
 	ApproveWorkLog(ctx context.Context, arg ApproveWorkLogParams) (ApproveWorkLogRow, error)
+	// Resolved disputes the owner won against this customer (damage and any other approved charge),
+	// each with a recorded resolution, less what could not be recovered from the deposit.
+	ApprovedDamageDeductions(ctx context.Context, arg ApprovedDamageDeductionsParams) (int64, error)
 	ArchiveFleet(ctx context.Context, arg ArchiveFleetParams) (Fleet, error)
 	AssignDispute(ctx context.Context, arg AssignDisputeParams) (Dispute, error)
 	AssignOperator(ctx context.Context, arg AssignOperatorParams) (AssignOperatorRow, error)
@@ -60,6 +64,7 @@ type Querier interface {
 	AutoApproveWorkLogs(ctx context.Context) (int64, error)
 	BillableHours(ctx context.Context, bookingID uuid.UUID) (float64, error)
 	BookingActiveOperators(ctx context.Context, bookingID uuid.UUID) ([]uuid.UUID, error)
+	BookingCompletedAt(ctx context.Context, id uuid.UUID) (*time.Time, error)
 	// ---- document audit history ------------------------------------------------------------------
 	// Every recorded change to, and download of, the booking's agreements,
 	// acceptance records and invoices, newest first.
@@ -80,6 +85,8 @@ type Querier interface {
 	// moderation and category administration.
 	// ---- catalogue ------------------------------------------------------------------------
 	CategoryBySlug(ctx context.Context, slug string) (CategoryBySlugRow, error)
+	// What other resolved owner-raised disputes of the booking already claim from the deposit.
+	ChargedAgainstDeposit(ctx context.Context, arg ChargedAgainstDepositParams) (int64, error)
 	// Due deliveries, plus ones a crashed worker left in 'sending'. The lock
 	// lease stops two workers sending the same delivery.
 	ClaimDeliveries(ctx context.Context, arg ClaimDeliveriesParams) ([]ClaimDeliveriesRow, error)
@@ -89,8 +96,14 @@ type Querier interface {
 	// this end time yet (an extension moves the end and earns a new reminder).
 	ClaimEndingSoonReminders(ctx context.Context, withinSeconds int32) ([]ClaimEndingSoonRemindersRow, error)
 	ClaimOutboxEvents(ctx context.Context, batchSize int32) ([]ClaimOutboxEventsRow, error)
-	// Refunds the worker sends to the gateway (gateway_refund_id empty) or waits on.
-	ClaimPendingRefunds(ctx context.Context, batchSize int32) ([]ClaimPendingRefundsRow, error)
+	// Short transaction: marks due refunds as submitting before the gateway is called. A refund
+	// stuck in submitting (worker crashed mid-call) is claimed again after 10 minutes and the
+	// worker looks it up at the gateway before sending anything.
+	ClaimRefundsForSubmit(ctx context.Context, arg ClaimRefundsForSubmitParams) ([]ClaimRefundsForSubmitRow, error)
+	ClaimWebhookByID(ctx context.Context, id uuid.UUID) (json.RawMessage, error)
+	// New deliveries start processing; a redelivery re-claims only a failed, received or
+	// stale-processing event. A processed or in-flight duplicate returns no row.
+	ClaimWebhookEvent(ctx context.Context, arg ClaimWebhookEventParams) (uuid.UUID, error)
 	ClearListingCover(ctx context.Context, equipmentID uuid.UUID) error
 	ClearSearchHistory(ctx context.Context, userID uuid.UUID) error
 	// Sessions with no position for the idle window are closed (a forgotten
@@ -111,6 +124,7 @@ type Querier interface {
 	CountOpenDisputes(ctx context.Context, bookingID uuid.UUID) (int32, error)
 	CountOpenRefunds(ctx context.Context, bookingID uuid.UUID) (int32, error)
 	CountOrgAddresses(ctx context.Context, organizationID uuid.UUID) (int32, error)
+	CountOtherCapturedPayments(ctx context.Context, arg CountOtherCapturedPaymentsParams) (int32, error)
 	CountRecentUploads(ctx context.Context, userID uuid.UUID) (int32, error)
 	CountUnreadMessages(ctx context.Context, userID uuid.NullUUID) (int32, error)
 	CountUnreadNotifications(ctx context.Context, userID uuid.UUID) (int32, error)
@@ -192,6 +206,9 @@ type Querier interface {
 	CurrentConversationMembers(ctx context.Context, conversationID uuid.UUID) ([]uuid.UUID, error)
 	// ---- commission configuration -------------------------------------------------------------------
 	CurrentDefaultCommission(ctx context.Context) (CurrentDefaultCommissionRow, error)
+	// ---- tax rules, payout idempotency, reconciliation (000042) ----------------------------------
+	CurrentTaxRate(ctx context.Context, arg CurrentTaxRateParams) (int32, error)
+	DeactivatePayoutItems(ctx context.Context, payoutID uuid.UUID) error
 	DeactivatePricingPlans(ctx context.Context, equipmentID uuid.UUID) error
 	// Approve or reject a submitted application, or revoke an approved one.
 	DecideApplication(ctx context.Context, arg DecideApplicationParams) (VerificationApplication, error)
@@ -199,6 +216,8 @@ type Querier interface {
 	DeleteAvailabilityBlock(ctx context.Context, arg DeleteAvailabilityBlockParams) (int64, error)
 	DeleteDevice(ctx context.Context, arg DeleteDeviceParams) (int64, error)
 	DeleteDocument(ctx context.Context, id uuid.UUID) (int64, error)
+	// Verification and reset tokens a day after they expired or were used.
+	DeleteExpiredAuthTokens(ctx context.Context) (int64, error)
 	DeleteExpiredIdempotencyKeys(ctx context.Context) (int64, error)
 	DeleteFleetGrants(ctx context.Context, arg DeleteFleetGrantsParams) error
 	DeleteFutureMaintenanceBlock(ctx context.Context, arg DeleteFutureMaintenanceBlockParams) error
@@ -215,6 +234,9 @@ type Querier interface {
 	DeleteSearchHistoryEntry(ctx context.Context, arg DeleteSearchHistoryEntryParams) (int64, error)
 	DeliveryStats(ctx context.Context) ([]DeliveryStatsRow, error)
 	DepositRefundedOnCancel(ctx context.Context, arg DepositRefundedOnCancelParams) error
+	// Held deposits of completed bookings. Released at once when no damage claim is open, else
+	// after the claim window so an unresolved claim can never keep a customer's money forever.
+	DepositsToRelease(ctx context.Context, arg DepositsToReleaseParams) ([]SecurityDeposit, error)
 	DeviceByToken(ctx context.Context, tokenSha256 []byte) (DeviceByTokenRow, error)
 	DistanceToSite(ctx context.Context, arg DistanceToSiteParams) (DistanceToSiteRow, error)
 	DriverCompensationHistory(ctx context.Context, arg DriverCompensationHistoryParams) ([]DriverCompensationEvent, error)
@@ -244,6 +266,7 @@ type Querier interface {
 	EnsureLocationPingPartitions(ctx context.Context, arg EnsureLocationPingPartitionsParams) error
 	EquipmentFleets(ctx context.Context, equipmentIds []uuid.UUID) ([]EquipmentFleetsRow, error)
 	EquipmentForEnquiry(ctx context.Context, id uuid.UUID) (EquipmentForEnquiryRow, error)
+	EquipmentOwnedByOrg(ctx context.Context, arg EquipmentOwnedByOrgParams) (bool, error)
 	EquipmentOwner(ctx context.Context, id uuid.UUID) (EquipmentOwnerRow, error)
 	// Owners that miss the response SLA lose the request (worker job).
 	ExpireStaleBookingRequests(ctx context.Context, batchSize int32) ([]ExpireStaleBookingRequestsRow, error)
@@ -255,6 +278,7 @@ type Querier interface {
 	// trigger refuse an overlap.
 	ExtendBookingPeriod(ctx context.Context, arg ExtendBookingPeriodParams) (ExtendBookingPeriodRow, error)
 	FailPayment(ctx context.Context, arg FailPaymentParams) (Payment, error)
+	FailedPayoutSettlements(ctx context.Context, payoutID uuid.UUID) ([]uuid.UUID, error)
 	FindModel(ctx context.Context, arg FindModelParams) (FindModelRow, error)
 	FinishDelivery(ctx context.Context, arg FinishDeliveryParams) error
 	FinishPayout(ctx context.Context, arg FinishPayoutParams) (FinishPayoutRow, error)
@@ -321,6 +345,7 @@ type Querier interface {
 	GetFleet(ctx context.Context, id uuid.UUID) (Fleet, error)
 	GetFleetManagerProfile(ctx context.Context, userID uuid.UUID) (GetFleetManagerProfileRow, error)
 	GetIdempotencyKey(ctx context.Context, arg GetIdempotencyKeyParams) (GetIdempotencyKeyRow, error)
+	GetInvitationForUpdate(ctx context.Context, arg GetInvitationForUpdateParams) (OrgInvitation, error)
 	GetInvoice(ctx context.Context, id uuid.UUID) (Invoice, error)
 	// Tax facts for a booking: supplier state vs place of supply (site state).
 	GetInvoiceContext(ctx context.Context, bookingID uuid.UUID) (GetInvoiceContextRow, error)
@@ -336,6 +361,7 @@ type Querier interface {
 	GetMaintenanceRecord(ctx context.Context, arg GetMaintenanceRecordParams) (MaintenanceRecord, error)
 	GetMaintenanceRecordView(ctx context.Context, arg GetMaintenanceRecordViewParams) (GetMaintenanceRecordViewRow, error)
 	GetMobilisationRate(ctx context.Context, equipmentID uuid.UUID) (GetMobilisationRateRow, error)
+	GetOpenBookingPayment(ctx context.Context, arg GetOpenBookingPaymentParams) (Payment, error)
 	GetOpenPayment(ctx context.Context, arg GetOpenPaymentParams) (Payment, error)
 	GetOpenSession(ctx context.Context, bookingID uuid.UUID) (GetOpenSessionRow, error)
 	GetOpenTripForBooking(ctx context.Context, bookingID uuid.UUID) (GetOpenTripForBookingRow, error)
@@ -347,6 +373,7 @@ type Querier interface {
 	GetPayment(ctx context.Context, id uuid.UUID) (Payment, error)
 	GetPaymentByIdempotencyKey(ctx context.Context, idempotencyKey string) (Payment, error)
 	GetPaymentByOrderID(ctx context.Context, gatewayOrderID *string) (Payment, error)
+	GetPayoutGatewayID(ctx context.Context, id uuid.UUID) (*string, error)
 	GetPincode(ctx context.Context, pincode string) (GetPincodeRow, error)
 	// Pricing engine inputs and owner booking rules.
 	// Listing terms for pricing. distance_km is 0 when no site is given.
@@ -363,6 +390,7 @@ type Querier interface {
 	GetRefund(ctx context.Context, id uuid.UUID) (GetRefundRow, error)
 	GetRefundByGatewayID(ctx context.Context, gatewayRefundID *string) (GetRefundByGatewayIDRow, error)
 	GetRefundDetail(ctx context.Context, id uuid.UUID) (GetRefundDetailRow, error)
+	GetRefundLedgerInfo(ctx context.Context, id uuid.UUID) (GetRefundLedgerInfoRow, error)
 	GetRentalAgreement(ctx context.Context, bookingID uuid.UUID) (RentalAgreement, error)
 	GetRentalAgreementByID(ctx context.Context, id uuid.UUID) (RentalAgreement, error)
 	GetRentalAgreementVersion(ctx context.Context, arg GetRentalAgreementVersionParams) (RentalAgreement, error)
@@ -385,6 +413,9 @@ type Querier interface {
 	HasChecklist(ctx context.Context, arg HasChecklistParams) (bool, error)
 	HasGeofenceEvent(ctx context.Context, arg HasGeofenceEventParams) (bool, error)
 	HasIssuedInvoice(ctx context.Context, arg HasIssuedInvoiceParams) (bool, error)
+	// The security deposit still held for a booking (0 when none) and the payment that carries it.
+	HeldDepositOfBooking(ctx context.Context, bookingID uuid.UUID) (HeldDepositOfBookingRow, error)
+	HeldDepositsOfCancelled(ctx context.Context, lim int32) ([]SecurityDeposit, error)
 	HoldDisputedSettlements(ctx context.Context) ([]uuid.UUID, error)
 	IncrementOTPAttempts(ctx context.Context, id uuid.UUID) (int16, error)
 	InsertAddress(ctx context.Context, arg InsertAddressParams) (InsertAddressRow, error)
@@ -403,6 +434,7 @@ type Querier interface {
 	// Operator jobs, job evidence (checklists, photos), reported issues and
 	// account restrictions.
 	InsertInspectionDecisionHistory(ctx context.Context, arg InsertInspectionDecisionHistoryParams) (InspectionDecisionHistory, error)
+	InsertInvitation(ctx context.Context, arg InsertInvitationParams) (OrgInvitation, error)
 	InsertIssueReport(ctx context.Context, arg InsertIssueReportParams) (IssueReport, error)
 	// ---- checklists ------------------------------------------------------------------------------
 	// A replay with the same client_id returns no row (the original stands).
@@ -414,11 +446,15 @@ type Querier interface {
 	InsertListingAudit(ctx context.Context, arg InsertListingAuditParams) error
 	InsertLocationPing(ctx context.Context, arg InsertLocationPingParams) (int64, error)
 	InsertModel(ctx context.Context, arg InsertModelParams) (uuid.UUID, error)
+	// Creates an empty profile for a new operator; an existing profile is never touched.
+	InsertOperatorProfileIfAbsent(ctx context.Context, arg InsertOperatorProfileIfAbsentParams) error
 	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) error
 	// ---- payouts ------------------------------------------------------------------------------------
 	InsertPayout(ctx context.Context, arg InsertPayoutParams) (uuid.UUID, error)
+	InsertPayoutIdem(ctx context.Context, arg InsertPayoutIdemParams) (uuid.UUID, error)
 	InsertPayoutItem(ctx context.Context, arg InsertPayoutItemParams) error
 	InsertPayoutTransfer(ctx context.Context, arg InsertPayoutTransferParams) (uuid.UUID, error)
+	InsertReconciliation(ctx context.Context, arg InsertReconciliationParams) error
 	// ---- account restrictions ---------------------------------------------------------------------
 	InsertRestriction(ctx context.Context, arg InsertRestrictionParams) (AccountRestriction, error)
 	// ---- security deposits --------------------------------------------------------------------------
@@ -426,10 +462,9 @@ type Querier interface {
 	InsertSettlement(ctx context.Context, arg InsertSettlementParams) (Settlement, error)
 	InsertSourcedPing(ctx context.Context, arg InsertSourcedPingParams) (int64, error)
 	// ---- hardware trackers -------------------------------------------------------------------------------
+	// Only for a machine the organisation owns (no row otherwise).
 	InsertTelematicsDevice(ctx context.Context, arg InsertTelematicsDeviceParams) (InsertTelematicsDeviceRow, error)
 	InsertVerificationEvent(ctx context.Context, arg InsertVerificationEventParams) error
-	// A duplicate delivery (same provider + event id) returns no row.
-	InsertWebhookEvent(ctx context.Context, arg InsertWebhookEventParams) (uuid.UUID, error)
 	InvalidateAuthTokens(ctx context.Context, arg InvalidateAuthTokensParams) error
 	IsConversationParticipant(ctx context.Context, arg IsConversationParticipantParams) (bool, error)
 	IsEquipmentActive(ctx context.Context, equipmentID uuid.UUID) (bool, error)
@@ -511,6 +546,7 @@ type Querier interface {
 	ListMemberConversations(ctx context.Context, arg ListMemberConversationsParams) ([]ListMemberConversationsRow, error)
 	ListMessages(ctx context.Context, arg ListMessagesParams) ([]ListMessagesRow, error)
 	ListModels(ctx context.Context, arg ListModelsParams) ([]ListModelsRow, error)
+	ListMyInvitations(ctx context.Context, userID uuid.UUID) ([]ListMyInvitationsRow, error)
 	// Communication and operations (migration 000020): notification preferences
 	// and push bookkeeping, agreement signatures and documents, chat attachments
 	// and enquiries, maintenance operations, review moderation.
@@ -528,6 +564,7 @@ type Querier interface {
 	ListOrgBookings(ctx context.Context, arg ListOrgBookingsParams) ([]ListOrgBookingsRow, error)
 	ListOrgDisputes(ctx context.Context, arg ListOrgDisputesParams) ([]Dispute, error)
 	ListOrgFleetManagers(ctx context.Context, organizationID uuid.UUID) ([]ListOrgFleetManagersRow, error)
+	ListOrgInvitations(ctx context.Context, organizationID uuid.UUID) ([]ListOrgInvitationsRow, error)
 	ListOrgInvoices(ctx context.Context, arg ListOrgInvoicesParams) ([]Invoice, error)
 	ListOrgMembers(ctx context.Context, organizationID uuid.NullUUID) ([]ListOrgMembersRow, error)
 	// Recipients for organisation-level notifications.
@@ -542,8 +579,10 @@ type Querier interface {
 	ListPricingPlans(ctx context.Context, equipmentID uuid.UUID) ([]ListPricingPlansRow, error)
 	ListPublishedReviews(ctx context.Context, arg ListPublishedReviewsParams) ([]ListPublishedReviewsRow, error)
 	ListQualifications(ctx context.Context, operatorUserID uuid.UUID) ([]OperatorQualification, error)
+	ListReconciliationMismatches(ctx context.Context, lim int32) ([]ListReconciliationMismatchesRow, error)
 	ListRentalAgreementVersions(ctx context.Context, bookingID uuid.UUID) ([]ListRentalAgreementVersionsRow, error)
 	ListRestrictions(ctx context.Context, arg ListRestrictionsParams) ([]ListRestrictionsRow, error)
+	ListRetryableWebhooks(ctx context.Context, arg ListRetryableWebhooksParams) ([]ListRetryableWebhooksRow, error)
 	// Saved machines, newest first; ones no longer listed come back with
 	// available = false so the customer can remove them.
 	ListSavedEquipment(ctx context.Context, userID uuid.UUID) ([]ListSavedEquipmentRow, error)
@@ -553,7 +592,7 @@ type Querier interface {
 	ListSubjectReviews(ctx context.Context, arg ListSubjectReviewsParams) ([]ListSubjectReviewsRow, error)
 	ListSupportAgentIDs(ctx context.Context) ([]uuid.UUID, error)
 	ListTaxRates(ctx context.Context) ([]TaxRate, error)
-	ListTelematicsDevices(ctx context.Context, equipmentID uuid.UUID) ([]ListTelematicsDevicesRow, error)
+	ListTelematicsDevices(ctx context.Context, arg ListTelematicsDevicesParams) ([]ListTelematicsDevicesRow, error)
 	ListUserConversations(ctx context.Context, arg ListUserConversationsParams) ([]ListUserConversationsRow, error)
 	ListUserConversationsV2(ctx context.Context, arg ListUserConversationsV2Params) ([]ListUserConversationsV2Row, error)
 	ListUserDevices(ctx context.Context, userID uuid.UUID) ([]ListUserDevicesRow, error)
@@ -568,6 +607,7 @@ type Querier interface {
 	// calendar, so they queue on the machine instead of deadlocking on each
 	// other's booking rows.
 	LockEquipmentForBooking(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
+	LockPaymentKey(ctx context.Context, key string) error
 	// ---- access audit ---------------------------------------------------------------------------------------
 	LogLocationAccess(ctx context.Context, arg LogLocationAccessParams) error
 	// Slot-holding bookings that overlap a proposed downtime.
@@ -589,13 +629,15 @@ type Querier interface {
 	MarkOutboxPublished(ctx context.Context, id uuid.UUID) error
 	MarkPhoneVerified(ctx context.Context, id uuid.UUID) error
 	MarkPlansReminded(ctx context.Context, ids []uuid.UUID) error
-	MarkRefundAttemptFailed(ctx context.Context, arg MarkRefundAttemptFailedParams) error
 	MarkRefundFailed(ctx context.Context, arg MarkRefundFailedParams) (uuid.UUID, error)
 	MarkRefundProcessed(ctx context.Context, arg MarkRefundProcessedParams) (uuid.UUID, error)
+	// A rejected (definite) or unknown (uncertain) gateway answer: try again later with backoff.
+	MarkRefundRetry(ctx context.Context, arg MarkRefundRetryParams) error
 	MarkRefundSubmitted(ctx context.Context, arg MarkRefundSubmittedParams) error
 	MarkUploadAttached(ctx context.Context, id uuid.UUID) error
 	MarkUserLoggedIn(ctx context.Context, id uuid.UUID) error
-	MarkWebhookProcessed(ctx context.Context, arg MarkWebhookProcessedParams) error
+	MarkWebhookFailed(ctx context.Context, arg MarkWebhookFailedParams) error
+	MarkWebhookProcessed(ctx context.Context, id uuid.UUID) error
 	ModelCategory(ctx context.Context, id uuid.UUID) (ModelCategoryRow, error)
 	ModerateListing(ctx context.Context, arg ModerateListingParams) (ModerateListingRow, error)
 	ModerateReview(ctx context.Context, arg ModerateReviewParams) (Review, error)
@@ -609,6 +651,8 @@ type Querier interface {
 	NotificationIDsForEvent(ctx context.Context, arg NotificationIDsForEventParams) ([]NotificationIDsForEventRow, error)
 	OpenPaymentAttempts(ctx context.Context, bookingID uuid.UUID) (int32, error)
 	OpenTripForEquipment(ctx context.Context, equipmentID uuid.UUID) (OpenTripForEquipmentRow, error)
+	// The operator still holds the operator role in another organisation.
+	OperatorActiveElsewhere(ctx context.Context, arg OperatorActiveElsewhereParams) (bool, error)
 	OperatorEligibleForEquipment(ctx context.Context, arg OperatorEligibleForEquipmentParams) (bool, error)
 	// The operator's latest assignment on a booking with what they need on site.
 	OperatorJobDetail(ctx context.Context, arg OperatorJobDetailParams) (OperatorJobDetailRow, error)
@@ -629,10 +673,13 @@ type Querier interface {
 	OwnerSideRecipients(ctx context.Context, arg OwnerSideRecipientsParams) ([]uuid.UUID, error)
 	PayDriverCompensation(ctx context.Context, arg PayDriverCompensationParams) (DriverCompensation, error)
 	PayableSettlements(ctx context.Context, lim int32) ([]PayableSettlementsRow, error)
+	PayoutByIdempotencyKey(ctx context.Context, arg PayoutByIdempotencyKeyParams) (uuid.UUID, error)
 	PayoutSettlements(ctx context.Context, payoutID uuid.UUID) ([]PayoutSettlementsRow, error)
 	PayoutTransferState(ctx context.Context, payoutID uuid.UUID) (PayoutTransferStateRow, error)
+	PayoutsToReconcile(ctx context.Context, lim int32) ([]PayoutsToReconcileRow, error)
 	PlatformStats(ctx context.Context) (PlatformStatsRow, error)
 	PlatformUsersWithRoles(ctx context.Context, roles []string) ([]uuid.UUID, error)
+	ProcessedRefundTotal(ctx context.Context, paymentID uuid.UUID) (int64, error)
 	PublishLegalTemplate(ctx context.Context, arg PublishLegalTemplateParams) (LegalTemplate, error)
 	// ---- realtime -----------------------------------------------------------------------------------
 	// Delivered to every API instance's listener when the transaction commits.
@@ -673,6 +720,7 @@ type Querier interface {
 	// citext makes "jcb" and "JCB" the same make; the first spelling is kept.
 	ResolveMake(ctx context.Context, name string) (uuid.UUID, error)
 	RespondExtension(ctx context.Context, arg RespondExtensionParams) (BookingExtension, error)
+	RespondInvitation(ctx context.Context, arg RespondInvitationParams) (int64, error)
 	RespondToAssignment(ctx context.Context, arg RespondToAssignmentParams) (RespondToAssignmentRow, error)
 	RetireBankAccounts(ctx context.Context, organizationID uuid.UUID) error
 	RetireEquipment(ctx context.Context, id uuid.UUID) (int64, error)
@@ -686,6 +734,7 @@ type Querier interface {
 	ReviewSummary(ctx context.Context, arg ReviewSummaryParams) ([]ReviewSummaryRow, error)
 	ReviewTaxRate(ctx context.Context, arg ReviewTaxRateParams) (uuid.UUID, error)
 	RevokeAllUserSessions(ctx context.Context, userID uuid.UUID) (int64, error)
+	RevokeInvitation(ctx context.Context, arg RevokeInvitationParams) (int64, error)
 	RevokeOtherUserSessions(ctx context.Context, arg RevokeOtherUserSessionsParams) (int64, error)
 	RevokeRole(ctx context.Context, arg RevokeRoleParams) (int64, error)
 	RevokeSession(ctx context.Context, id uuid.UUID) (int64, error)
@@ -715,9 +764,12 @@ type Querier interface {
 	SetListingCover(ctx context.Context, arg SetListingCoverParams) (int64, error)
 	SetMaintenanceBlock(ctx context.Context, arg SetMaintenanceBlockParams) error
 	SetOperatorDuty(ctx context.Context, arg SetOperatorDutyParams) (bool, error)
+	// Moves only the employer. Licence, experience, duty and verification stay as they are.
+	SetOperatorEmployer(ctx context.Context, arg SetOperatorEmployerParams) (int64, error)
 	SetOperatorVerified(ctx context.Context, arg SetOperatorVerifiedParams) error
 	SetOrgKYCStatus(ctx context.Context, arg SetOrgKYCStatusParams) error
 	SetPasswordHash(ctx context.Context, arg SetPasswordHashParams) error
+	SetPayoutGatewayID(ctx context.Context, arg SetPayoutGatewayIDParams) error
 	SetReviewReply(ctx context.Context, arg SetReviewReplyParams) (Review, error)
 	SetReviewStatus(ctx context.Context, arg SetReviewStatusParams) (Review, error)
 	SetSettlementStatus(ctx context.Context, arg SetSettlementStatusParams) (Settlement, error)
@@ -725,10 +777,12 @@ type Querier interface {
 	// ---- customer -----------------------------------------------------------------------------
 	SetUserAvatar(ctx context.Context, arg SetUserAvatarParams) error
 	SetUserStatus(ctx context.Context, arg SetUserStatusParams) (SetUserStatusRow, error)
+	SettleDispute(ctx context.Context, arg SettleDisputeParams) error
 	// ---- settlements -------------------------------------------------------------------------------
 	// Finished bookings with no settlement whose deposit (if any) is resolved
 	// and with no refund still in flight.
 	SettlementCandidates(ctx context.Context, lim int32) ([]uuid.UUID, error)
+	SettlementInputs(ctx context.Context, bookingID uuid.UUID) (SettlementInputsRow, error)
 	// Held bookings and owner blocks overlapping [from, to).
 	SlotConflicts(ctx context.Context, arg SlotConflictsParams) ([]SlotConflictsRow, error)
 	// Held bookings (other than @booking_id) and owner blocks overlapping [from, to).
@@ -743,6 +797,8 @@ type Querier interface {
 	StartTrip(ctx context.Context, arg StartTripParams) (StartTripRow, error)
 	SubmitApplication(ctx context.Context, arg SubmitApplicationParams) (VerificationApplication, error)
 	SubmitWorkLog(ctx context.Context, arg SubmitWorkLogParams) (SubmitWorkLogRow, error)
+	// Refunds the gateway accepted but has not confirmed (no webhook yet).
+	SubmittedRefundsToCheck(ctx context.Context, batchSize int32) ([]SubmittedRefundsToCheckRow, error)
 	// Equipment discovery. Public results only ever contain active listings of
 	// active categories, and only the approximate public_location (never
 	// base_location) is read or returned.
@@ -755,6 +811,7 @@ type Querier interface {
 	SumCapturedPayments(ctx context.Context, bookingID uuid.UUID) (int64, error)
 	SupersedeRentalAgreement(ctx context.Context, arg SupersedeRentalAgreementParams) (int64, error)
 	TouchDevice(ctx context.Context, id uuid.UUID) error
+	TouchRefundCheck(ctx context.Context, id uuid.UUID) error
 	TouchSession(ctx context.Context, id uuid.UUID) error
 	// Captured payments of a booking with what can still be transferred.
 	TransferSources(ctx context.Context, bookingID uuid.UUID) ([]TransferSourcesRow, error)
@@ -813,6 +870,10 @@ type Querier interface {
 	UserContact(ctx context.Context, id uuid.UUID) (UserContactRow, error)
 	UserHasOrgRole(ctx context.Context, arg UserHasOrgRoleParams) (bool, error)
 	UserHasPermission(ctx context.Context, arg UserHasPermissionParams) (bool, error)
+	// One atomic step for the newest live token of this address: a wrong code costs an attempt
+	// (the token is burned at 5), the right code consumes it. Expired, consumed or exhausted
+	// tokens never match, so a code cannot be replayed or guessed without limit.
+	VerifyAuthToken(ctx context.Context, arg VerifyAuthTokenParams) (VerifyAuthTokenRow, error)
 	WithdrawConsent(ctx context.Context, arg WithdrawConsentParams) (int64, error)
 	ZeroSettlementsPaid(ctx context.Context) ([]uuid.UUID, error)
 }

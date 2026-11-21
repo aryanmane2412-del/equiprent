@@ -148,6 +148,35 @@ RETURNING d.id;
 -- name: DueDeposits :many
 SELECT * FROM security_deposits WHERE status = 'held' AND claim_deadline <= now() ORDER BY claim_deadline LIMIT @lim FOR UPDATE SKIP LOCKED;
 
+-- name: DepositsToRelease :many
+-- Held deposits of completed bookings. Released at once when no damage claim is open, else
+-- after the claim window so an unresolved claim can never keep a customer's money forever.
+SELECT d.* FROM security_deposits d JOIN bookings b ON b.id = d.booking_id
+WHERE d.status = 'held' AND b.status IN ('completed', 'closed')
+  AND ((NOT EXISTS (SELECT 1 FROM disputes x WHERE x.booking_id = b.id AND x.status IN ('open', 'under_review'))
+        AND NOT EXISTS (SELECT 1 FROM issue_reports i WHERE i.booking_id = b.id AND i.kind = 'damage' AND i.status IN ('open', 'under_review')))
+       OR b.status_changed_at < now() - make_interval(secs => @window_seconds::float8))
+ORDER BY b.status_changed_at LIMIT @lim
+FOR UPDATE OF d SKIP LOCKED;
+
+-- name: ApprovedDamageDeductions :one
+-- Resolved disputes the owner won against this customer (damage and any other approved charge),
+-- each with a recorded resolution, less what could not be recovered from the deposit.
+SELECT COALESCE(sum(resolved_amount_paise - unrecovered_paise), 0)::bigint AS total FROM disputes
+WHERE booking_id = @booking_id AND status = 'resolved'
+  AND raised_by_org_id = @owner_org_id AND against_org_id = @customer_org_id
+  AND resolved_amount_paise > 0 AND btrim(resolution) <> '';
+
+-- name: HeldDepositsOfCancelled :many
+SELECT d.* FROM security_deposits d JOIN bookings b ON b.id = d.booking_id
+WHERE d.status = 'held' AND b.status IN ('cancelled', 'refund_pending', 'refunded', 'expired', 'rejected')
+  AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.booking_id = b.id AND r.status = 'pending')
+ORDER BY d.created_at LIMIT @lim
+FOR UPDATE OF d SKIP LOCKED;
+
+-- name: ProcessedRefundTotal :one
+SELECT COALESCE(sum(amount_paise), 0)::bigint AS total FROM refunds WHERE payment_id = @payment_id AND status = 'processed';
+
 -- name: ListDeposits :many
 SELECT d.*, b.reference AS booking_reference, e.title AS equipment_title
 FROM security_deposits d JOIN bookings b ON b.id = d.booking_id JOIN equipment e ON e.id = b.equipment_id
@@ -278,7 +307,7 @@ FROM settlements s
 JOIN payout_linked_accounts l ON l.owner_org_id = s.owner_org_id AND l.activation_status = 'activated'
 WHERE s.status = 'eligible' AND s.net_payable_paise > 0
   AND NOT EXISTS (SELECT 1 FROM payout_items pi JOIN payouts po ON po.id = pi.payout_id
-                   WHERE pi.settlement_id = s.id AND po.status IN ('queued', 'processing', 'paid'))
+                   WHERE pi.settlement_id = s.id AND pi.active AND po.status IN ('queued', 'processing', 'paid'))
 ORDER BY s.eligible_at
 LIMIT @lim
 FOR UPDATE OF s SKIP LOCKED;
@@ -388,3 +417,47 @@ LIMIT @lim;
 
 -- name: BookingParties :one
 SELECT b.id, b.reference, b.owner_org_id, b.customer_org_id, b.status::text AS status FROM bookings b WHERE b.id = @id;
+
+-- ---- tax rules, payout idempotency, reconciliation (000042) ----------------------------------
+
+-- name: CurrentTaxRate :one
+SELECT rate_bps FROM tax_rules WHERE code = @code AND effective_from <= @at ORDER BY effective_from DESC LIMIT 1;
+
+-- name: PayoutByIdempotencyKey :one
+SELECT id FROM payouts WHERE owner_org_id = @owner_org_id AND idempotency_key = @key;
+
+-- name: InsertPayoutIdem :one
+INSERT INTO payouts (owner_org_id, bank_account_id, linked_account_id, amount_paise, status, batch_date, idempotency_key)
+VALUES (@owner_org_id, sqlc.narg(bank_account_id), @linked_account_id, @amount_paise, 'processing', (now() AT TIME ZONE 'Asia/Kolkata')::date, @idempotency_key)
+ON CONFLICT (owner_org_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+RETURNING id;
+
+-- name: DeactivatePayoutItems :exec
+UPDATE payout_items SET active = false WHERE payout_id = @payout_id;
+
+-- name: InsertReconciliation :exec
+INSERT INTO payout_reconciliations (payout_id, gateway_status, gateway_paise, matches, note)
+VALUES (@payout_id, @gateway_status, @gateway_paise, @matches, sqlc.narg(note));
+
+-- name: PayoutsToReconcile :many
+SELECT id, owner_org_id, amount_paise, status::text AS status FROM payouts
+WHERE status IN ('processing', 'paid') AND NOT EXISTS (SELECT 1 FROM payout_reconciliations r WHERE r.payout_id = payouts.id AND r.matches)
+ORDER BY created_at LIMIT @lim;
+
+-- name: ListReconciliationMismatches :many
+SELECT r.*, p.owner_org_id FROM payout_reconciliations r JOIN payouts p ON p.id = r.payout_id
+WHERE NOT r.matches ORDER BY r.checked_at DESC LIMIT @lim;
+
+-- name: SettlementInputs :one
+SELECT b.id, b.owner_org_id, b.price_snapshot AS price, b.status_changed_at,
+       (o.gstin IS NOT NULL)::bool AS owner_gst, (o.pan_enc IS NOT NULL)::bool AS owner_pan
+FROM bookings b JOIN organizations o ON o.id = b.owner_org_id WHERE b.id = @booking_id;
+
+-- name: SetPayoutGatewayID :exec
+UPDATE payouts SET gateway_transfer_id = @gateway_transfer_id WHERE id = @id;
+
+-- name: FailedPayoutSettlements :many
+SELECT pi.settlement_id FROM payout_items pi WHERE pi.payout_id = @payout_id;
+
+-- name: GetPayoutGatewayID :one
+SELECT gateway_transfer_id FROM payouts WHERE id = @id;

@@ -51,39 +51,49 @@ func (q *Queries) BookingPaymentTotals(ctx context.Context, bookingID uuid.UUID)
 	return items, nil
 }
 
-const claimPendingRefunds = `-- name: ClaimPendingRefunds :many
-SELECT r.id, r.payment_id, r.booking_id, r.amount_paise, r.idempotency_key, r.attempts, r.gateway_refund_id,
-       p.gateway, p.gateway_payment_id
-FROM refunds r
-JOIN payments p ON p.id = r.payment_id
-WHERE r.status = 'pending' AND r.gateway_refund_id IS NULL AND r.attempts < 10
-ORDER BY r.created_at
-LIMIT $1
-FOR UPDATE OF r SKIP LOCKED
+const claimRefundsForSubmit = `-- name: ClaimRefundsForSubmit :many
+WITH due AS (
+  SELECT r.id FROM refunds r
+  WHERE r.status = 'pending' AND r.gateway_refund_id IS NULL AND (r.attempts < $1::int OR r.submit_state <> 'queued')
+    AND ((r.submit_state IN ('queued', 'uncertain') AND r.next_attempt_at <= now())
+      OR (r.submit_state = 'submitting' AND r.submit_started_at < now() - interval '10 minutes'))
+  ORDER BY r.created_at
+  LIMIT $2
+  FOR UPDATE SKIP LOCKED)
+UPDATE refunds r SET submit_state = 'submitting', submit_started_at = now(), attempts = r.attempts + 1
+FROM due, payments p
+WHERE r.id = due.id AND p.id = r.payment_id
+RETURNING r.id, r.payment_id, r.booking_id, r.amount_paise, r.idempotency_key, r.attempts, p.gateway, p.gateway_payment_id
 `
 
-type ClaimPendingRefundsRow struct {
+type ClaimRefundsForSubmitParams struct {
+	MaxAttempts int32 `json:"max_attempts"`
+	BatchSize   int32 `json:"batch_size"`
+}
+
+type ClaimRefundsForSubmitRow struct {
 	ID               uuid.UUID `json:"id"`
 	PaymentID        uuid.UUID `json:"payment_id"`
 	BookingID        uuid.UUID `json:"booking_id"`
 	AmountPaise      int64     `json:"amount_paise"`
 	IdempotencyKey   string    `json:"idempotency_key"`
 	Attempts         int32     `json:"attempts"`
-	GatewayRefundID  *string   `json:"gateway_refund_id"`
 	Gateway          string    `json:"gateway"`
 	GatewayPaymentID *string   `json:"gateway_payment_id"`
 }
 
-// Refunds the worker sends to the gateway (gateway_refund_id empty) or waits on.
-func (q *Queries) ClaimPendingRefunds(ctx context.Context, batchSize int32) ([]ClaimPendingRefundsRow, error) {
-	rows, err := q.db.Query(ctx, claimPendingRefunds, batchSize)
+// Short transaction: marks due refunds as submitting before the gateway is called. A refund
+// stuck in submitting (worker crashed mid-call) is claimed again after 10 minutes and the
+// worker looks it up at the gateway before sending anything.
+func (q *Queries) ClaimRefundsForSubmit(ctx context.Context, arg ClaimRefundsForSubmitParams) ([]ClaimRefundsForSubmitRow, error) {
+	rows, err := q.db.Query(ctx, claimRefundsForSubmit, arg.MaxAttempts, arg.BatchSize)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ClaimPendingRefundsRow{}
+	items := []ClaimRefundsForSubmitRow{}
 	for rows.Next() {
-		var i ClaimPendingRefundsRow
+		var i ClaimRefundsForSubmitRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.PaymentID,
@@ -91,7 +101,6 @@ func (q *Queries) ClaimPendingRefunds(ctx context.Context, batchSize int32) ([]C
 			&i.AmountPaise,
 			&i.IdempotencyKey,
 			&i.Attempts,
-			&i.GatewayRefundID,
 			&i.Gateway,
 			&i.GatewayPaymentID,
 		); err != nil {
@@ -424,6 +433,31 @@ func (q *Queries) GetRefundByGatewayID(ctx context.Context, gatewayRefundID *str
 	return i, err
 }
 
+const getRefundLedgerInfo = `-- name: GetRefundLedgerInfo :one
+SELECT r.amount_paise, r.booking_id, r.payment_id,
+       EXISTS (SELECT 1 FROM security_deposits d WHERE d.refund_id = r.id) AS is_deposit
+FROM refunds r WHERE r.id = $1
+`
+
+type GetRefundLedgerInfoRow struct {
+	AmountPaise int64     `json:"amount_paise"`
+	BookingID   uuid.UUID `json:"booking_id"`
+	PaymentID   uuid.UUID `json:"payment_id"`
+	IsDeposit   bool      `json:"is_deposit"`
+}
+
+func (q *Queries) GetRefundLedgerInfo(ctx context.Context, id uuid.UUID) (GetRefundLedgerInfoRow, error) {
+	row := q.db.QueryRow(ctx, getRefundLedgerInfo, id)
+	var i GetRefundLedgerInfoRow
+	err := row.Scan(
+		&i.AmountPaise,
+		&i.BookingID,
+		&i.PaymentID,
+		&i.IsDeposit,
+	)
+	return i, err
+}
+
 const lapsedExtensions = `-- name: LapsedExtensions :many
 SELECT x.id, x.booking_id, b.version, b.reference, b.customer_org_id, b.owner_org_id
 FROM booking_extensions x
@@ -572,20 +606,6 @@ func (q *Queries) LockEquipmentForBooking(ctx context.Context, id uuid.UUID) (uu
 	return id_2, err
 }
 
-const markRefundAttemptFailed = `-- name: MarkRefundAttemptFailed :exec
-UPDATE refunds SET attempts = attempts + 1, failure_reason = $1 WHERE id = $2 AND status = 'pending'
-`
-
-type MarkRefundAttemptFailedParams struct {
-	FailureReason *string   `json:"failure_reason"`
-	ID            uuid.UUID `json:"id"`
-}
-
-func (q *Queries) MarkRefundAttemptFailed(ctx context.Context, arg MarkRefundAttemptFailedParams) error {
-	_, err := q.db.Exec(ctx, markRefundAttemptFailed, arg.FailureReason, arg.ID)
-	return err
-}
-
 const markRefundFailed = `-- name: MarkRefundFailed :one
 UPDATE refunds SET status = 'failed', failure_reason = $1
 WHERE id = $2 AND status = 'pending'
@@ -622,8 +642,33 @@ func (q *Queries) MarkRefundProcessed(ctx context.Context, arg MarkRefundProcess
 	return booking_id, err
 }
 
+const markRefundRetry = `-- name: MarkRefundRetry :exec
+UPDATE refunds SET submit_state = CASE WHEN $1::bool THEN 'uncertain' ELSE 'queued' END,
+       failure_reason = $2, next_attempt_at = now() + make_interval(secs => $3::float8)
+WHERE id = $4 AND status = 'pending' AND gateway_refund_id IS NULL
+`
+
+type MarkRefundRetryParams struct {
+	Uncertain     bool      `json:"uncertain"`
+	FailureReason *string   `json:"failure_reason"`
+	DelaySeconds  float64   `json:"delay_seconds"`
+	ID            uuid.UUID `json:"id"`
+}
+
+// A rejected (definite) or unknown (uncertain) gateway answer: try again later with backoff.
+func (q *Queries) MarkRefundRetry(ctx context.Context, arg MarkRefundRetryParams) error {
+	_, err := q.db.Exec(ctx, markRefundRetry,
+		arg.Uncertain,
+		arg.FailureReason,
+		arg.DelaySeconds,
+		arg.ID,
+	)
+	return err
+}
+
 const markRefundSubmitted = `-- name: MarkRefundSubmitted :exec
-UPDATE refunds SET gateway_refund_id = $1, attempts = attempts + 1 WHERE id = $2 AND status = 'pending'
+UPDATE refunds SET gateway_refund_id = $1, submit_state = 'submitted', failure_reason = NULL, last_checked_at = now()
+WHERE id = $2 AND status = 'pending' AND gateway_refund_id IS NULL
 `
 
 type MarkRefundSubmittedParams struct {
@@ -895,7 +940,7 @@ func (q *Queries) SetBookingResponseDue(ctx context.Context, arg SetBookingRespo
 const slotConflictsExcept = `-- name: SlotConflictsExcept :many
 SELECT lower(b.period)::timestamptz AS starts_at, upper(b.period)::timestamptz AS ends_at, 'booked'::text AS kind
 FROM bookings b
-WHERE b.equipment_id = $1 AND b.id <> $2 AND booking_holds_slot(b.status)
+WHERE b.equipment_id = $1 AND b.id <> $2 AND booking_holds_slot(b.status, b.resume_status)
   AND b.period && tstzrange($3::timestamptz, $4::timestamptz, '[)')
 UNION ALL
 SELECT lower(a.period)::timestamptz, upper(a.period)::timestamptz, 'blocked'::text
@@ -943,6 +988,40 @@ func (q *Queries) SlotConflictsExcept(ctx context.Context, arg SlotConflictsExce
 	return items, nil
 }
 
+const submittedRefundsToCheck = `-- name: SubmittedRefundsToCheck :many
+SELECT id, booking_id, gateway_refund_id FROM refunds
+WHERE status = 'pending' AND gateway_refund_id IS NOT NULL
+  AND COALESCE(last_checked_at, submit_started_at, created_at) < now() - interval '10 minutes'
+ORDER BY created_at LIMIT $1
+`
+
+type SubmittedRefundsToCheckRow struct {
+	ID              uuid.UUID `json:"id"`
+	BookingID       uuid.UUID `json:"booking_id"`
+	GatewayRefundID *string   `json:"gateway_refund_id"`
+}
+
+// Refunds the gateway accepted but has not confirmed (no webhook yet).
+func (q *Queries) SubmittedRefundsToCheck(ctx context.Context, batchSize int32) ([]SubmittedRefundsToCheckRow, error) {
+	rows, err := q.db.Query(ctx, submittedRefundsToCheck, batchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SubmittedRefundsToCheckRow{}
+	for rows.Next() {
+		var i SubmittedRefundsToCheckRow
+		if err := rows.Scan(&i.ID, &i.BookingID, &i.GatewayRefundID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const sumApprovedExtensions = `-- name: SumApprovedExtensions :one
 SELECT COALESCE(sum(amount_paise), 0)::bigint AS total
 FROM booking_extensions WHERE booking_id = $1 AND status = 'approved'
@@ -953,6 +1032,15 @@ func (q *Queries) SumApprovedExtensions(ctx context.Context, bookingID uuid.UUID
 	var total int64
 	err := row.Scan(&total)
 	return total, err
+}
+
+const touchRefundCheck = `-- name: TouchRefundCheck :exec
+UPDATE refunds SET last_checked_at = now() WHERE id = $1
+`
+
+func (q *Queries) TouchRefundCheck(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, touchRefundCheck, id)
+	return err
 }
 
 const updateDraftBooking = `-- name: UpdateDraftBooking :one

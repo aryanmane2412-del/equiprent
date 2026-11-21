@@ -15,7 +15,7 @@ import (
 const assignDispute = `-- name: AssignDispute :one
 UPDATE disputes SET assigned_admin_id = $1, status = 'under_review'
 WHERE id = $2 AND status IN ('open', 'under_review')
-RETURNING id, booking_id, raised_by_org_id, raised_by_user_id, against_org_id, category, summary, amount_claimed_paise, resolved_amount_paise, currency, status, resolution, assigned_admin_id, conversation_id, opened_at, resolved_at, updated_at
+RETURNING id, booking_id, raised_by_org_id, raised_by_user_id, against_org_id, category, summary, amount_claimed_paise, resolved_amount_paise, currency, status, resolution, assigned_admin_id, conversation_id, opened_at, resolved_at, updated_at, refunded_paise, unrecovered_paise
 `
 
 type AssignDisputeParams struct {
@@ -44,8 +44,41 @@ func (q *Queries) AssignDispute(ctx context.Context, arg AssignDisputeParams) (D
 		&i.OpenedAt,
 		&i.ResolvedAt,
 		&i.UpdatedAt,
+		&i.RefundedPaise,
+		&i.UnrecoveredPaise,
 	)
 	return i, err
+}
+
+const bookingCompletedAt = `-- name: BookingCompletedAt :one
+SELECT completed_at FROM bookings WHERE id = $1
+`
+
+func (q *Queries) BookingCompletedAt(ctx context.Context, id uuid.UUID) (*time.Time, error) {
+	row := q.db.QueryRow(ctx, bookingCompletedAt, id)
+	var completed_at *time.Time
+	err := row.Scan(&completed_at)
+	return completed_at, err
+}
+
+const chargedAgainstDeposit = `-- name: ChargedAgainstDeposit :one
+SELECT COALESCE(sum(resolved_amount_paise - unrecovered_paise), 0)::bigint AS charged
+FROM disputes WHERE booking_id = $1 AND id <> $2 AND status = 'resolved'
+  AND raised_by_org_id = $3 AND resolved_amount_paise > 0
+`
+
+type ChargedAgainstDepositParams struct {
+	BookingID  uuid.UUID `json:"booking_id"`
+	ExcludeID  uuid.UUID `json:"exclude_id"`
+	OwnerOrgID uuid.UUID `json:"owner_org_id"`
+}
+
+// What other resolved owner-raised disputes of the booking already claim from the deposit.
+func (q *Queries) ChargedAgainstDeposit(ctx context.Context, arg ChargedAgainstDepositParams) (int64, error) {
+	row := q.db.QueryRow(ctx, chargedAgainstDeposit, arg.BookingID, arg.ExcludeID, arg.OwnerOrgID)
+	var charged int64
+	err := row.Scan(&charged)
+	return charged, err
 }
 
 const countOpenDisputes = `-- name: CountOpenDisputes :one
@@ -62,7 +95,7 @@ func (q *Queries) CountOpenDisputes(ctx context.Context, bookingID uuid.UUID) (i
 const createDispute = `-- name: CreateDispute :one
 INSERT INTO disputes (booking_id, raised_by_org_id, raised_by_user_id, against_org_id, category, summary, amount_claimed_paise, conversation_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, booking_id, raised_by_org_id, raised_by_user_id, against_org_id, category, summary, amount_claimed_paise, resolved_amount_paise, currency, status, resolution, assigned_admin_id, conversation_id, opened_at, resolved_at, updated_at
+RETURNING id, booking_id, raised_by_org_id, raised_by_user_id, against_org_id, category, summary, amount_claimed_paise, resolved_amount_paise, currency, status, resolution, assigned_admin_id, conversation_id, opened_at, resolved_at, updated_at, refunded_paise, unrecovered_paise
 `
 
 type CreateDisputeParams struct {
@@ -106,6 +139,8 @@ func (q *Queries) CreateDispute(ctx context.Context, arg CreateDisputeParams) (D
 		&i.OpenedAt,
 		&i.ResolvedAt,
 		&i.UpdatedAt,
+		&i.RefundedPaise,
+		&i.UnrecoveredPaise,
 	)
 	return i, err
 }
@@ -162,7 +197,7 @@ func (q *Queries) CreateReview(ctx context.Context, arg CreateReviewParams) (Rev
 }
 
 const getDispute = `-- name: GetDispute :one
-SELECT id, booking_id, raised_by_org_id, raised_by_user_id, against_org_id, category, summary, amount_claimed_paise, resolved_amount_paise, currency, status, resolution, assigned_admin_id, conversation_id, opened_at, resolved_at, updated_at FROM disputes WHERE id = $1
+SELECT id, booking_id, raised_by_org_id, raised_by_user_id, against_org_id, category, summary, amount_claimed_paise, resolved_amount_paise, currency, status, resolution, assigned_admin_id, conversation_id, opened_at, resolved_at, updated_at, refunded_paise, unrecovered_paise FROM disputes WHERE id = $1
 `
 
 func (q *Queries) GetDispute(ctx context.Context, id uuid.UUID) (Dispute, error) {
@@ -186,6 +221,8 @@ func (q *Queries) GetDispute(ctx context.Context, id uuid.UUID) (Dispute, error)
 		&i.OpenedAt,
 		&i.ResolvedAt,
 		&i.UpdatedAt,
+		&i.RefundedPaise,
+		&i.UnrecoveredPaise,
 	)
 	return i, err
 }
@@ -218,8 +255,26 @@ func (q *Queries) GetRentalAgreement(ctx context.Context, bookingID uuid.UUID) (
 	return i, err
 }
 
+const heldDepositOfBooking = `-- name: HeldDepositOfBooking :one
+SELECT COALESCE(sum(amount_paise), 0)::bigint AS held_paise, COALESCE(max(payment_id::text), '')::text AS payment_id
+FROM security_deposits WHERE booking_id = $1 AND status = 'held'
+`
+
+type HeldDepositOfBookingRow struct {
+	HeldPaise int64  `json:"held_paise"`
+	PaymentID string `json:"payment_id"`
+}
+
+// The security deposit still held for a booking (0 when none) and the payment that carries it.
+func (q *Queries) HeldDepositOfBooking(ctx context.Context, bookingID uuid.UUID) (HeldDepositOfBookingRow, error) {
+	row := q.db.QueryRow(ctx, heldDepositOfBooking, bookingID)
+	var i HeldDepositOfBookingRow
+	err := row.Scan(&i.HeldPaise, &i.PaymentID)
+	return i, err
+}
+
 const listDisputeQueue = `-- name: ListDisputeQueue :many
-SELECT id, booking_id, raised_by_org_id, raised_by_user_id, against_org_id, category, summary, amount_claimed_paise, resolved_amount_paise, currency, status, resolution, assigned_admin_id, conversation_id, opened_at, resolved_at, updated_at FROM disputes
+SELECT id, booking_id, raised_by_org_id, raised_by_user_id, against_org_id, category, summary, amount_claimed_paise, resolved_amount_paise, currency, status, resolution, assigned_admin_id, conversation_id, opened_at, resolved_at, updated_at, refunded_paise, unrecovered_paise FROM disputes
 WHERE ($1::text IS NULL OR status::text = $1)
   AND ($2::uuid IS NULL OR id < $2)
 ORDER BY id DESC
@@ -259,6 +314,8 @@ func (q *Queries) ListDisputeQueue(ctx context.Context, arg ListDisputeQueuePara
 			&i.OpenedAt,
 			&i.ResolvedAt,
 			&i.UpdatedAt,
+			&i.RefundedPaise,
+			&i.UnrecoveredPaise,
 		); err != nil {
 			return nil, err
 		}
@@ -271,7 +328,7 @@ func (q *Queries) ListDisputeQueue(ctx context.Context, arg ListDisputeQueuePara
 }
 
 const listOrgDisputes = `-- name: ListOrgDisputes :many
-SELECT id, booking_id, raised_by_org_id, raised_by_user_id, against_org_id, category, summary, amount_claimed_paise, resolved_amount_paise, currency, status, resolution, assigned_admin_id, conversation_id, opened_at, resolved_at, updated_at FROM disputes
+SELECT id, booking_id, raised_by_org_id, raised_by_user_id, against_org_id, category, summary, amount_claimed_paise, resolved_amount_paise, currency, status, resolution, assigned_admin_id, conversation_id, opened_at, resolved_at, updated_at, refunded_paise, unrecovered_paise FROM disputes
 WHERE (raised_by_org_id = $1 OR against_org_id = $1)
   AND ($2::uuid IS NULL OR id < $2)
 ORDER BY id DESC
@@ -311,6 +368,8 @@ func (q *Queries) ListOrgDisputes(ctx context.Context, arg ListOrgDisputesParams
 			&i.OpenedAt,
 			&i.ResolvedAt,
 			&i.UpdatedAt,
+			&i.RefundedPaise,
+			&i.UnrecoveredPaise,
 		); err != nil {
 			return nil, err
 		}
@@ -428,7 +487,7 @@ UPDATE disputes
 SET status = $1, resolution = $2, resolved_amount_paise = $3,
     resolved_at = now(), assigned_admin_id = COALESCE(assigned_admin_id, $4)
 WHERE id = $5 AND status IN ('open', 'under_review')
-RETURNING id, booking_id, raised_by_org_id, raised_by_user_id, against_org_id, category, summary, amount_claimed_paise, resolved_amount_paise, currency, status, resolution, assigned_admin_id, conversation_id, opened_at, resolved_at, updated_at
+RETURNING id, booking_id, raised_by_org_id, raised_by_user_id, against_org_id, category, summary, amount_claimed_paise, resolved_amount_paise, currency, status, resolution, assigned_admin_id, conversation_id, opened_at, resolved_at, updated_at, refunded_paise, unrecovered_paise
 `
 
 type ResolveDisputeParams struct {
@@ -466,6 +525,8 @@ func (q *Queries) ResolveDispute(ctx context.Context, arg ResolveDisputeParams) 
 		&i.OpenedAt,
 		&i.ResolvedAt,
 		&i.UpdatedAt,
+		&i.RefundedPaise,
+		&i.UnrecoveredPaise,
 	)
 	return i, err
 }
@@ -504,4 +565,19 @@ func (q *Queries) SetReviewStatus(ctx context.Context, arg SetReviewStatusParams
 		&i.RepliedAt,
 	)
 	return i, err
+}
+
+const settleDispute = `-- name: SettleDispute :exec
+UPDATE disputes SET refunded_paise = $1, unrecovered_paise = $2 WHERE id = $3
+`
+
+type SettleDisputeParams struct {
+	RefundedPaise    int64     `json:"refunded_paise"`
+	UnrecoveredPaise int64     `json:"unrecovered_paise"`
+	ID               uuid.UUID `json:"id"`
+}
+
+func (q *Queries) SettleDispute(ctx context.Context, arg SettleDisputeParams) error {
+	_, err := q.db.Exec(ctx, settleDispute, arg.RefundedPaise, arg.UnrecoveredPaise, arg.ID)
+	return err
 }

@@ -1915,6 +1915,11 @@
       "auth.VerifyEmailRequest": {
         "type": "object",
         "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 254
+          },
           "token": {
             "type": "string",
             "minLength": 6,
@@ -1922,6 +1927,7 @@
           }
         },
         "required": [
+          "email",
           "token"
         ]
       },
@@ -5463,6 +5469,11 @@
             "type": "string",
             "format": "uuid"
           },
+          "refunded_paise": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Approved amount returned to the customer"
+          },
           "resolution": {
             "type": [
               "string",
@@ -5488,6 +5499,11 @@
           },
           "summary": {
             "type": "string"
+          },
+          "unrecovered_paise": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Approved amount that could not be collected or refunded"
           }
         },
         "required": [
@@ -5498,6 +5514,8 @@
           "category",
           "summary",
           "amount_claimed_paise",
+          "refunded_paise",
+          "unrecovered_paise",
           "status",
           "assigned_admin_id",
           "conversation_id",
@@ -12233,6 +12251,55 @@
           }
         }
       },
+      "users.Invitation": {
+        "type": "object",
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "organization_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "organization_name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "organization_name",
+          "role",
+          "created_at",
+          "expires_at"
+        ]
+      },
+      "users.InvitationList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/users.Invitation"
+            }
+          }
+        },
+        "required": [
+          "data"
+        ]
+      },
       "users.Member": {
         "type": "object",
         "properties": {
@@ -12243,10 +12310,20 @@
             "type": "string",
             "format": "date-time"
           },
+          "invitation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
           "phone": {
             "type": "string"
           },
           "role": {
+            "type": "string"
+          },
+          "status": {
             "type": "string"
           },
           "user_id": {
@@ -12269,6 +12346,59 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/users.Member"
+            }
+          }
+        },
+        "required": [
+          "data"
+        ]
+      },
+      "users.OrgInvitation": {
+        "type": "object",
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "full_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "id",
+          "user_id",
+          "full_name",
+          "phone",
+          "role",
+          "created_at",
+          "expires_at"
+        ]
+      },
+      "users.OrgInvitationList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/users.OrgInvitation"
             }
           }
         },
@@ -23073,6 +23203,108 @@
         }
       }
     },
+    "/api/v1/invitations/{id}/accept": {
+      "post": {
+        "summary": "Accept an invitation (the role is granted only now)",
+        "operationId": "postApiV1InvitationsIdAccept",
+        "tags": [
+          "users"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem409"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Problem500"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/invitations/{id}/decline": {
+      "post": {
+        "summary": "Decline an invitation",
+        "operationId": "postApiV1InvitationsIdDecline",
+        "tags": [
+          "users"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem409"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Problem500"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/v1/invoices": {
       "get": {
         "summary": "Invoices issued by or to my organisation",
@@ -23711,6 +23943,47 @@
           },
           "409": {
             "$ref": "#/components/responses/Problem409"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Problem500"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/invitations": {
+      "get": {
+        "summary": "Invitations to join an organisation",
+        "operationId": "getApiV1MeInvitations",
+        "tags": [
+          "users"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/users.InvitationList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem403"
           },
           "429": {
             "$ref": "#/components/responses/Problem429"
@@ -25823,6 +26096,121 @@
       "delete": {
         "summary": "Delete a saved address",
         "operationId": "deleteApiV1OrgsOrgIdAddressesId",
+        "tags": [
+          "users"
+        ],
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem409"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Problem500"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/orgs/{org_id}/invitations": {
+      "get": {
+        "summary": "Pending invitations of the organisation",
+        "operationId": "getApiV1OrgsOrgIdInvitations",
+        "tags": [
+          "users"
+        ],
+        "parameters": [
+          {
+            "name": "org_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/users.OrgInvitationList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem404"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Problem500"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/orgs/{org_id}/invitations/{id}": {
+      "delete": {
+        "summary": "Withdraw a pending invitation",
+        "operationId": "deleteApiV1OrgsOrgIdInvitationsId",
         "tags": [
           "users"
         ],

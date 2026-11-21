@@ -103,7 +103,7 @@ RETURNING id, status, version;
 -- name: RetireOwnerEquipment :execrows
 UPDATE equipment SET status = 'retired', deleted_at = now(), version = version + 1
 WHERE equipment.id = @id AND equipment.owner_org_id = @owner_org_id AND equipment.deleted_at IS NULL
-  AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.equipment_id = equipment.id AND booking_holds_slot(b.status));
+  AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.equipment_id = equipment.id AND booking_holds_slot(b.status, b.resume_status));
 
 -- name: EquipmentOwner :one
 SELECT owner_org_id, status FROM equipment WHERE id = @id AND deleted_at IS NULL;
@@ -154,7 +154,7 @@ WHERE e.status = 'active'
   AND ST_DWithin(e.base_location, site.g, LEAST(e.service_radius_km, @max_km::int) * 1000.0)
   AND NOT EXISTS (
     SELECT 1 FROM bookings b
-    WHERE b.equipment_id = e.id AND booking_holds_slot(b.status)
+    WHERE b.equipment_id = e.id AND booking_holds_slot(b.status, b.resume_status)
       AND b.period && tstzrange(@starts_at::timestamptz, @ends_at::timestamptz, '[)'))
   AND NOT EXISTS (
     SELECT 1 FROM availability_blocks a

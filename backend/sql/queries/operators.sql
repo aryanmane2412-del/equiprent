@@ -63,3 +63,18 @@ SELECT EXISTS (
   SELECT 1 FROM verification_applications
   WHERE role = 'operator' AND user_id = @user_id AND status IN ('submitted', 'under_review', 'approved')
 ) AS locked;
+
+-- name: InsertOperatorProfileIfAbsent :exec
+-- Creates an empty profile for a new operator; an existing profile is never touched.
+INSERT INTO operator_profiles (user_id, employer_organization_id)
+VALUES (@user_id, @employer_organization_id)
+ON CONFLICT (user_id) DO NOTHING;
+
+-- name: SetOperatorEmployer :execrows
+-- Moves only the employer. Licence, experience, duty and verification stay as they are.
+UPDATE operator_profiles SET employer_organization_id = @employer_organization_id WHERE user_id = @user_id;
+
+-- name: OperatorActiveElsewhere :one
+-- The operator still holds the operator role in another organisation.
+SELECT EXISTS (SELECT 1 FROM user_roles WHERE user_id = @user_id AND role_code = 'operator' AND revoked_at IS NULL
+               AND organization_id IS DISTINCT FROM @organization_id::uuid)::bool AS active;

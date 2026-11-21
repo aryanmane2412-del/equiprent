@@ -25,3 +25,7 @@ DELETE FROM otp_challenges WHERE created_at < now() - interval '7 days';
 -- name: TryAdvisoryXactLock :one
 -- Ensures a background job runs on one worker at a time.
 SELECT pg_try_advisory_xact_lock(@lock_key::bigint) AS locked;
+
+-- name: DeleteExpiredAuthTokens :execrows
+-- Verification and reset tokens a day after they expired or were used.
+DELETE FROM auth_tokens WHERE expires_at < now() - interval '1 day' OR consumed_at < now() - interval '1 day';

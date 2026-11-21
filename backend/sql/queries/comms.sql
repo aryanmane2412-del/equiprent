@@ -265,7 +265,7 @@ DELETE FROM availability_blocks WHERE id = @id AND reason = 'maintenance' AND lo
 -- Slot-holding bookings that overlap a proposed downtime.
 SELECT reference, lower(period)::timestamptz AS starts_at, upper(period)::timestamptz AS ends_at
 FROM bookings
-WHERE equipment_id = @equipment_id AND booking_holds_slot(status)
+WHERE equipment_id = @equipment_id AND booking_holds_slot(status, resume_status)
   AND period && tstzrange(@starts_at::timestamptz, @ends_at::timestamptz, '[)')
 ORDER BY lower(period)
 LIMIT 5;
