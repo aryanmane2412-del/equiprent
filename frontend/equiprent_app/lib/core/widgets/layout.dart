@@ -23,6 +23,7 @@ class AppPage extends StatelessWidget {
     super.key,
     required this.title,
     required this.body,
+    this.titleWidget,
     this.subtitle,
     this.actions = const [],
     this.floatingActionButton,
@@ -32,6 +33,10 @@ class AppPage extends StatelessWidget {
   });
 
   final String title;
+
+  /// Replaces the title text (and subtitle) in the app bar, e.g. with the brand logo. [title] is
+  /// still required: it names the page for accessibility and browser history.
+  final Widget? titleWidget;
   final String? subtitle;
   final Widget body;
   final List<Widget> actions;
@@ -45,33 +50,37 @@ class AppPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final sideLogo =
+        topLevel && context.windowSize.isCompact && titleWidget == null;
     return Scaffold(
       appBar: AppBar(
         toolbarHeight: 64,
         automaticallyImplyLeading: !topLevel,
-        leadingWidth: topLevel && context.windowSize.isCompact ? 104 : null,
-        leading: topLevel && context.windowSize.isCompact
+        leadingWidth: sideLogo ? 104 : null,
+        leading: sideLogo
             ? const Padding(
                 padding: EdgeInsets.only(left: AppSpacing.sm),
                 child: Center(child: BrandLogo(compact: true)),
               )
             : null,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
-            if (subtitle != null)
-              Text(
-                subtitle!,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: AppColors.slate500,
-                ),
-              ),
-          ],
-        ),
+        title:
+            titleWidget ??
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                if (subtitle != null)
+                  Text(
+                    subtitle!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: AppColors.slate500,
+                    ),
+                  ),
+              ],
+            ),
         actions: [
           ...actions,
           if (topLevel) ...[
@@ -451,7 +460,11 @@ class RoleBadge extends ConsumerWidget {
   static (Color, Color, String) styleOf(UserRole r) => switch (r) {
     UserRole.customer => (AppColors.orange600, AppColors.onAccent, 'Customer'),
     UserRole.owner => (AppColors.navy700, AppColors.white, 'Owner'),
-    UserRole.operator => (AppColors.warningContainer, AppColors.onWarningContainer, 'Driver'),
+    UserRole.operator => (
+      AppColors.warningContainer,
+      AppColors.onWarningContainer,
+      'Driver',
+    ),
     UserRole.fleetManager => (AppColors.green700, AppColors.white, 'Fleet'),
     UserRole.admin => (AppColors.adminBrown, AppColors.white, 'Admin'),
   };
@@ -467,15 +480,31 @@ class RoleBadge extends ConsumerWidget {
       child: Container(
         key: const Key('role-badge'),
         margin: const EdgeInsets.symmetric(horizontal: 4),
-        padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12, vertical: 6),
-        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(role.icon, size: 16, color: fg),
-          if (!compact) ...[
-            const SizedBox(width: 6),
-            Text('$name panel', style: TextStyle(color: fg, fontSize: 12, fontWeight: FontWeight.w600)),
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 8 : 12,
+          vertical: 6,
+        ),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(role.icon, size: 16, color: fg),
+            if (!compact) ...[
+              const SizedBox(width: 6),
+              Text(
+                '$name panel',
+                style: TextStyle(
+                  color: fg,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
           ],
-        ]),
+        ),
       ),
     );
   }

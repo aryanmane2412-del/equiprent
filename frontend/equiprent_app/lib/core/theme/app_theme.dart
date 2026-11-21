@@ -5,7 +5,8 @@ import 'app_tokens.dart';
 
 /// Type scale (Inter, bundled in assets/fonts). Sizes in logical pixels.
 abstract final class AppTypography {
-  static const fontFamily = 'Inter';
+  static const fontFamily = 'InstrumentSans';
+  static const headingFamily = 'Alatsi';
 
   static const _tight = -0.4;
 
@@ -128,10 +129,21 @@ abstract final class AppTheme {
   /// (navy on white) best on bright construction sites. Dark mode is planned.
   static ThemeData light() {
     const scheme = colorScheme;
-    final text = AppTypography.textTheme.apply(
+    final base = AppTypography.textTheme.apply(
       fontFamily: AppTypography.fontFamily,
       bodyColor: AppColors.textPrimary,
       displayColor: AppColors.textPrimary,
+    );
+    // Mockup type system: Alatsi for display/headline, Instrument Sans else.
+    TextStyle? head(TextStyle? t) => t?.copyWith(
+      fontFamily: AppTypography.headingFamily,
+      fontWeight: FontWeight.w400,
+    );
+    final text = base.copyWith(
+      displaySmall: head(base.displaySmall),
+      headlineLarge: head(base.headlineLarge),
+      headlineMedium: head(base.headlineMedium),
+      headlineSmall: head(base.headlineSmall),
     );
     const controlShape = RoundedRectangleBorder(
       borderRadius: AppRadius.control,
@@ -285,7 +297,7 @@ abstract final class AppTheme {
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: AppColors.white,
         surfaceTintColor: Colors.transparent,
-        indicatorColor: AppColors.orange100,
+        indicatorColor: const Color(0xFFF4F3F7),
         height: 68,
         elevation: 0,
         labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
@@ -293,16 +305,16 @@ abstract final class AppTheme {
           (s) => text.labelSmall?.copyWith(
             letterSpacing: 0,
             color: s.contains(WidgetState.selected)
-                ? AppColors.orange700
-                : AppColors.slate500,
+                ? AppColors.navy700
+                : AppColors.slate600,
           ),
         ),
         iconTheme: WidgetStateProperty.resolveWith(
           (s) => IconThemeData(
             size: 22,
             color: s.contains(WidgetState.selected)
-                ? AppColors.orange700
-                : AppColors.slate500,
+                ? AppColors.navy700
+                : AppColors.slate600,
           ),
         ),
       ),

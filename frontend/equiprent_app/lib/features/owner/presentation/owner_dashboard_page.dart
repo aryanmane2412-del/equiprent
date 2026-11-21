@@ -147,12 +147,55 @@ class OwnerDashboardPage extends ConsumerWidget {
                       padding: const EdgeInsets.only(bottom: AppSpacing.sm),
                       child: AppCard(
                         onTap: () => context.push('/owner/bookings/${b.id}'),
-                        child: ListRow(
-                          dense: true,
-                          title: b.equipmentTitle,
-                          subtitle:
-                              '${b.reference} Â· ${Fmt.dateRange(b.start, b.end)} Â· ${money(b.totalPaise)}',
-                          trailing: BookingStatusBadge(b.status),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        b.equipmentTitle,
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.titleMedium,
+                                      ),
+                                      Text(
+                                        '${b.reference} · ${Fmt.dateRange(b.start, b.end)}',
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall,
+                                      ),
+                                      Text(
+                                        'Payout ${money(b.totalPaise)}',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelLarge
+                                            ?.copyWith(
+                                              color: AppColors.navy700,
+                                            ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                BookingStatusBadge(b.status),
+                              ],
+                            ),
+                            const Gap(AppSpacing.sm),
+                            SizedBox(
+                              width: double.infinity,
+                              child: AppButton(
+                                label: 'Review request',
+                                icon: AppIcons.checkCircle,
+                                onPressed: () =>
+                                    context.push('/owner/bookings/${b.id}'),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -204,7 +247,7 @@ class OwnerDashboardPage extends ConsumerWidget {
                                 dense: true,
                                 title: m.task,
                                 subtitle:
-                                    '${m.equipmentTitle}${m.scheduledFor == null ? '' : ' Â· ${Fmt.shortDate(m.scheduledFor!)}'}',
+                                    '${m.equipmentTitle}${m.scheduledFor == null ? '' : ' · ${Fmt.shortDate(m.scheduledFor!)}'}',
                                 trailing: StatusBadge(
                                   label: m.overdue ? 'Overdue' : 'Due soon',
                                   tone: m.overdue

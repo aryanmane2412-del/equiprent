@@ -83,6 +83,19 @@ flutter:
   # the app never fetches fonts at runtime. Full character set, which includes
   # the rupee sign (U+20B9); Devanagari falls back to the platform font.
   fonts:
+    - family: Alatsi
+      fonts:
+        - asset: assets/fonts/Alatsi-400.ttf
+    - family: InstrumentSans
+      fonts:
+        - asset: assets/fonts/InstrumentSans.ttf
+          weight: 400
+        - asset: assets/fonts/InstrumentSans.ttf
+          weight: 500
+        - asset: assets/fonts/InstrumentSans.ttf
+          weight: 600
+        - asset: assets/fonts/InstrumentSans.ttf
+          weight: 700
     - family: Inter
       fonts:
         - asset: assets/fonts/Inter-400.ttf
