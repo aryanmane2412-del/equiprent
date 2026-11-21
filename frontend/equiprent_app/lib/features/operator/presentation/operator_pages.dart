@@ -116,6 +116,17 @@ class OperatorTodayPage extends ConsumerWidget {
     return AppPage(
       title: 'Today',
       subtitle: Fmt.dayDate(DateTime.now()),
+      actions: [
+        IconButton(
+          key: const Key('operator-refresh'),
+          tooltip: 'Refresh',
+          icon: const Icon(AppIcons.refresh),
+          onPressed: () {
+            ref.invalidate(myJobsProvider('current'));
+            ref.invalidate(myScheduleProvider);
+          },
+        ),
+      ],
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(myJobsProvider('current'));
@@ -123,6 +134,50 @@ class OperatorTodayPage extends ConsumerWidget {
         },
         child: PageBody(
           children: [
+            Container(
+              key: const Key('operator-status-banner'),
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.md,
+                vertical: AppSpacing.ms,
+              ),
+              decoration: BoxDecoration(
+                color: const Color(0xFFD3F3D9),
+                borderRadius: BorderRadius.circular(AppRadius.md),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    AppIcons.verified,
+                    color: Color(0xFF0B461C),
+                  ),
+                  const Gap(AppSpacing.sm),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Driver panel',
+                          style: TextStyle(
+                            color: Color(0xFF0B461C),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          current.maybeWhen(
+                            data: (j) => j.isEmpty
+                                ? 'No jobs assigned right now'
+                                : '${j.length} ${j.length == 1 ? 'job' : 'jobs'} assigned',
+                            orElse: () => 'Loading your jobs…',
+                          ),
+                          style: const TextStyle(color: Color(0xFF0B461C)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Gap(AppSpacing.md),
             const SectionHeader(title: 'Open jobs'),
             AsyncBody(
               value: current,
@@ -178,6 +233,16 @@ class OperatorJobsPage extends ConsumerWidget {
     final history = scope == 'history';
     return AppPage(
       title: history ? 'Job history' : 'Assignments',
+      actions: [
+        IconButton(
+          key: const Key('operator-refresh'),
+          tooltip: 'Refresh',
+          icon: const Icon(AppIcons.refresh),
+          onPressed: () {
+            ref.invalidate(myJobsProvider(scope));
+          },
+        ),
+      ],
       body: AsyncBody(
         value: jobs,
         onRetry: () => ref.invalidate(myJobsProvider(scope)),
@@ -243,6 +308,16 @@ class OperatorJobPage extends ConsumerWidget {
       title: job.value?.equipmentTitle ?? 'Job',
       subtitle: job.value?.reference,
       topLevel: false,
+      actions: [
+        IconButton(
+          key: const Key('operator-refresh'),
+          tooltip: 'Refresh',
+          icon: const Icon(AppIcons.refresh),
+          onPressed: () {
+            ref.invalidate(myJobProvider(bookingId));
+          },
+        ),
+      ],
       bottomBar: job.value == null || job.value!.nextSteps.isEmpty
           ? null
           : BottomActionBar(
@@ -643,6 +718,14 @@ class OperatorNavigationPage extends ConsumerWidget {
     return AppPage(
       title: 'Navigate to site',
       topLevel: false,
+      actions: [
+        IconButton(
+          key: const Key('operator-refresh'),
+          tooltip: 'Refresh',
+          icon: const Icon(AppIcons.refresh),
+          onPressed: () => ref.invalidate(myJobProvider(bookingId)),
+        ),
+      ],
       body: AsyncBody(
         value: job,
         onRetry: () => ref.invalidate(myJobProvider(bookingId)),

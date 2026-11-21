@@ -14,6 +14,14 @@ class OperatorPaymentPage extends ConsumerWidget {
     return AppPage(
       title: 'Driver payments',
       subtitle: 'Agreed amounts and recorded payment history',
+      actions: [
+        IconButton(
+          key: const Key('operator-refresh'),
+          tooltip: 'Refresh',
+          icon: const Icon(AppIcons.refresh),
+          onPressed: () => ref.invalidate(myDriverPaymentsProvider),
+        ),
+      ],
       body: AsyncBody(
         value: payments,
         onRetry: () => ref.invalidate(myDriverPaymentsProvider),
